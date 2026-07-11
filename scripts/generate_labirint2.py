@@ -252,7 +252,7 @@ def main():
     print("Smoothing turn angles...")
     smooth_mod = joined_walls.modifiers.new(name="Smooth", type='SMOOTH')
     smooth_mod.factor = 1.0
-    smooth_mod.iterations = 35  # Creates soft inner turns and blends junctions
+    smooth_mod.iterations = 65  # Creates soft inner turns and blends junctions (large radius)
     bpy.ops.object.modifier_apply(modifier=smooth_mod.name)
     
     # 7. Sharp Frame Slice: Cut the outer frame to restore sharp 90-degree outer corners
