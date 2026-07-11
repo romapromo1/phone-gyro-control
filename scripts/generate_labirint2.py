@@ -3,18 +3,18 @@ import math
 import os
 import random
 
-# === CONFIGURATION ===
-GRID_SIZE = 10          # 10x10 cell grid
-MAZE_TOTAL_SIZE = 3560  # Total maze size in Blender units
-CELL_SIZE = MAZE_TOTAL_SIZE / GRID_SIZE  # ~356 units per cell
-WALL_THICKNESS = 30     # Wall thickness
-WALL_HEIGHT = 120       # Wall height
-OUTER_WALL_THICKNESS = 45  # Outer border thickness
+# === CONFIGURATION (in real-world METERS, matching labirint.fbx) ===
+GRID_SIZE = 10
+MAZE_TOTAL_SIZE = 35.6157  # Target size of the maze in meters
+CELL_SIZE = MAZE_TOTAL_SIZE / GRID_SIZE  # ~3.56157 m per cell
+WALL_THICKNESS = 0.4678  # exact Cube.003 thickness
+WALL_HEIGHT = 0.9101     # exact Cube.003 height
+OUTER_WALL_THICKNESS = 0.4678  # exact Cube.003 thickness for borders
 
 # Output directory
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "public", "source")
-FORMA_PATH = r"C:\Users\RocketPC\Downloads\forma.fbx"
+FORMA_PATH = os.path.join(OUTPUT_DIR, "forma.fbx")
 
 def clear_scene():
     """Remove all objects from the scene."""
@@ -89,7 +89,7 @@ def create_wall_segment_from_template(wall_template, x, y, z, length, thickness,
     obj.location = (x, y, z)
     obj.rotation_euler = (0, 0, rotation_z)
     
-    # Template dims: X=2.2985, Y=0.4678, Z=0.9101
+    # Template dimensions in meters: X=2.2985, Y=0.4678, Z=0.9101
     obj.scale = (length / 2.2985, thickness / 0.4678, height / 0.9101)
     
     # Apply scale and rotation
@@ -104,10 +104,9 @@ def build_maze_model(cells, wall_template, floor_obj, maze_name="labirint2"):
     rows = len(cells)
     cols = len(cells[0])
     
-    # Position floor
+    # Position floor exactly at the center (it's already 35.61m x 34.68m)
     floor_obj.name = f"{maze_name}_floor"
-    floor_obj.location = (0, 0, -15 / 2)
-    # Scale floor to match overall size
+    floor_obj.location = (0, 0, -0.3668 / 2)
     floor_obj.scale = (1.0, 1.0, 1.0)
     
     # Unlink template from selection during creation
@@ -179,8 +178,8 @@ def build_maze_model(cells, wall_template, floor_obj, maze_name="labirint2"):
                 
     return wall_objs
 
-def apply_remesh_and_smooth(wall_objs, final_name="labirint2"):
-    # Join walls
+def finalize_walls(wall_objs, final_name="labirint2"):
+    """Join wall segments directly without applying slow, high-poly modifiers like Bevel/Remesh."""
     bpy.ops.object.select_all(action='DESELECT')
     for obj in wall_objs:
         obj.select_set(True)
@@ -190,28 +189,16 @@ def apply_remesh_and_smooth(wall_objs, final_name="labirint2"):
     joined_walls = bpy.context.active_object
     joined_walls.name = f"{final_name}_walls"
     
-    # Weld/Merge double vertices before remeshing
+    # Optional: weld double vertices at the ends of straight segments to optimize
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.remove_doubles(threshold=1.0)
+    bpy.ops.mesh.remove_doubles(threshold=0.01)
     bpy.ops.object.mode_set(mode='OBJECT')
     
-    # Voxel Remesh to weld intersecting intersections cleanly
-    remesh_mod = joined_walls.modifiers.new(name="Remesh", type='REMESH')
-    remesh_mod.mode = 'VOXEL'
-    remesh_mod.voxel_size = 7.0  # Clean resolution for 3560 unit maze size
-    remesh_mod.adaptivity = 0.0
-    bpy.ops.object.modifier_apply(modifier=remesh_mod.name)
-    
-    # Smooth modifier to create high-radius inner corners and round the outer caps
-    smooth_mod = joined_walls.modifiers.new(name="Smooth", type='SMOOTH')
-    smooth_mod.factor = 1.0
-    smooth_mod.iterations = 18
-    bpy.ops.object.modifier_apply(modifier=smooth_mod.name)
-    
+    # Shade smooth to preserve the template's look
     bpy.ops.object.shade_smooth()
     
-    # Apply default material
+    # Assign materials (FloorMaterial and WallsMaterial)
     mat_walls = bpy.data.materials.new(name="WallsMaterial")
     joined_walls.data.materials.append(mat_walls)
     
@@ -236,12 +223,12 @@ def export_fbx(filepath):
 
 def main():
     print("\n" + "=" * 60)
-    print("GENERATING NEW LABY RINT 2 USING BLENDER")
+    print("GENERATING OPTIMIZED LABIRINT2 (35.6157 m)")
     print("=" * 60)
     
     clear_scene()
     
-    # 1. Load forma.fbx
+    # Load user's updated forma.fbx
     print(f"Loading template model from: {FORMA_PATH}")
     bpy.ops.import_scene.fbx(filepath=FORMA_PATH)
     
@@ -259,12 +246,12 @@ def main():
     print("Assembling wall pieces...")
     wall_objs = build_maze_model(cells, wall_template, floor_obj, "labirint2")
     
-    # Remove the original template object so it is not in the final scene
+    # Remove the template object
     bpy.data.objects.remove(wall_template, do_unlink=True)
     
-    # Join and apply organic smooth rounding to walls
-    print("Merging and rounding wall joints...")
-    joined_walls = apply_remesh_and_smooth(wall_objs, "labirint2")
+    # Join walls directly (low poly, optimized)
+    print("Joining wall objects...")
+    joined_walls = finalize_walls(wall_objs, "labirint2")
     
     # Re-apply floor material slot
     mat_floor = bpy.data.materials.new(name="FloorMaterial")
@@ -280,7 +267,7 @@ def main():
     export_fbx(output_path)
     
     print("\n" + "=" * 60)
-    print("NEW LABIRINT2 GENERATED SUCCESSFULLY!")
+    print("NEW OPTIMIZED LABIRINT2 GENERATED SUCCESSFULLY!")
     print("=" * 60)
 
 if __name__ == "__main__":
