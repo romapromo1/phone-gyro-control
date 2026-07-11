@@ -167,9 +167,16 @@ class SoundManager {
 const sounds = new SoundManager();
 
 // Resume/initialize AudioContext on any user gesture to satisfy browser autoplay policies
-window.addEventListener('click', () => sounds.init());
-window.addEventListener('keydown', () => sounds.init());
-window.addEventListener('touchstart', () => sounds.init());
+function handleUserGesture() {
+  sounds.init();
+  const promptEl = document.getElementById('audio-prompt');
+  if (promptEl) {
+    promptEl.classList.add('hidden');
+  }
+}
+window.addEventListener('click', handleUserGesture);
+window.addEventListener('keydown', handleUserGesture);
+window.addEventListener('touchstart', handleUserGesture);
 
 // Game State variables
 let scene: THREE.Scene;

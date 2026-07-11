@@ -410,3 +410,55 @@
   background: var(--accent-magenta);
   box-shadow: var(--glow-shadow-pink);
 }
+
+/* Audio Autoplay Prompt Banner */
+.audio-prompt-banner {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 12px 24px;
+  border-radius: 30px;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+  z-index: 100;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  animation: pulse-banner 2s infinite ease-in-out;
+}
+
+.audio-prompt-banner.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 20px) !important;
+}
+
+.audio-prompt-icon {
+  display: inline-block;
+  animation: wiggle-speaker 1.5s infinite ease-in-out;
+}
+
+@keyframes pulse-banner {
+  0%, 100% {
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+  }
+  50% {
+    box-shadow: 0 10px 30px rgba(0, 102, 204, 0.18);
+  }
+}
+
+@keyframes wiggle-speaker {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-10deg); }
+  75% { transform: rotate(10deg); }
+}
