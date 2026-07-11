@@ -412,10 +412,10 @@ async function init() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   // Add Lights
-  const ambientLight = new THREE.AmbientLight(0x0b0f19, 1.5);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
   scene.add(ambientLight);
 
-  const mainLight = new THREE.DirectionalLight(0xffffff, 2.5);
+  const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
   mainLight.position.set(20, 50, 10);
   mainLight.castShadow = true;
   mainLight.shadow.mapSize.width = 2048;
@@ -470,8 +470,8 @@ function loadMazeAsset() {
 
   const floorMaterial = new THREE.MeshStandardMaterial({
     color: 0xddff68, // #ddff68 (requested color)
-    roughness: 0.8,  // high roughness to show diffuse color
-    metalness: 0.1,  // low metalness to prevent mirroring the white background
+    roughness: 0.3,  // requested: 0.3
+    metalness: 0.7,  // requested: 0.7
     side: THREE.DoubleSide // Render both sides in case normals are inverted in the model
   });
 
@@ -501,12 +501,7 @@ function loadMazeAsset() {
                         nameLower.includes('cube.001');
         const activeMaterial = isFloor ? floorMaterial : mazeMaterial;
 
-        // Handle multi-material meshes: apply active material to all slots
-        if (Array.isArray(child.material)) {
-          child.material = child.material.map(() => activeMaterial);
-        } else {
-          child.material = activeMaterial;
-        }
+        child.material = activeMaterial;
         child.castShadow = true;
         child.receiveShadow = true;
       }
