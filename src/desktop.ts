@@ -482,6 +482,7 @@ function loadMazeAsset() {
 
     // Apply PBR material to all meshes (FBX has no embedded textures)
     mazeGroup.traverse((child) => {
+      debugLog(`Child in FBX: name="${child.name}", type="${child.type}", isMesh=${child instanceof THREE.Mesh}`);
       if (child instanceof THREE.Mesh) {
         const nameLower = child.name.toLowerCase();
         const isFloor = nameLower.includes('floor') || 
