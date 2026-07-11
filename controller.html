@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Maze Gyro Controller</title>
+  <link rel="stylesheet" href="/src/common.css">
+  <link rel="stylesheet" href="/src/controller.css">
+</head>
+<body>
+  <div id="controller-app">
+    <!-- Initial Permission Screen -->
+    <div id="permission-screen" class="screen">
+      <div class="glass-panel text-center animate-fade-in">
+        <h1 class="glow-text-mobile">Gyro Control</h1>
+        <p class="desc">Положите смартфон горизонтально на ладонь экраном вверх и нажмите кнопку калибровки, чтобы установить начальный наклон в ноль.</p>
+        <button id="btn-request-permission" class="glow-btn">Калибровка</button>
+      </div>
+    </div>
+
+    <!-- Active Controller Dashboard -->
+    <div id="dashboard-screen" class="screen hidden">
+      <div class="header">
+        <div class="status-badge">
+          <span class="status-indicator-dot"></span> СВЯЗЬ АКТИВНА
+        </div>
+      </div>
+
+      <div class="sensor-display">
+        <!-- Visual 2D Bubble Level -->
+        <div class="level-outer">
+          <div class="level-crosshair horizontal"></div>
+          <div class="level-crosshair vertical"></div>
+          <div id="level-bubble"></div>
+        </div>
+
+        <div class="numeric-grid">
+          <div class="metric-card">
+            <span class="label">Вперед / Назад</span>
+            <span class="value" id="val-pitch">0.0°</span>
+          </div>
+          <div class="metric-card">
+            <span class="label">Влево / Вправо</span>
+            <span class="value" id="val-roll">0.0°</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Touch D-pad Fallback controls -->
+      <div class="touch-controls-dpad animate-fade-in">
+        <p class="instruction">Или управляйте стрелками:</p>
+        <div class="dpad-container">
+          <button id="btn-dpad-up" class="dpad-btn">▲</button>
+          <div class="dpad-row">
+            <button id="btn-dpad-left" class="dpad-btn">◀</button>
+            <button id="btn-dpad-right" class="dpad-btn">▶</button>
+          </div>
+          <button id="btn-dpad-down" class="dpad-btn">▼</button>
+        </div>
+      </div>
+
+      <div class="controls-area">
+        <p class="instruction">Держите телефон плоско. Если лабиринт накренился, нажмите кнопку калибровки:</p>
+        <button id="btn-calibrate-mobile" class="glow-btn btn-full">Калибровка</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/controller.ts"></script>
+</body>
+</html>

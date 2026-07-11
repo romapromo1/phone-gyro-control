@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Holobox Gyro Labyrinth</title>
+  <link rel="stylesheet" href="/src/common.css">
+  <link rel="stylesheet" href="/src/desktop.css">
+</head>
+<body>
+  <div id="app">
+    <!-- WebGL Canvas -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Overlay: QR Code Pairing & Server Info -->
+    <div id="pairing-overlay" class="overlay">
+      <div class="glass-panel text-center animate-fade-in">
+        <h1 class="glow-text">Gyro Maze 3D</h1>
+        <p class="subtitle">Управляйте шаром с помощью смартфона</p>
+        
+        <div class="qr-container">
+          <img id="qr-code" alt="Генерация QR-кода..." />
+        </div>
+        
+        <div class="server-info">
+          <p>Сканируйте QR-код или откройте в браузере телефона:</p>
+          <code id="controller-url">Ожидание сервера...</code>
+        </div>
+        
+        <div class="status-msg waiting">
+          <span class="pulse-dot"></span> Ожидание подключения смартфона...
+        </div>
+      </div>
+    </div>
+
+    <!-- UI Overlay for Game Status -->
+    <div id="hud-overlay" class="hidden">
+      <div class="hud-top">
+        <div class="level-info">
+          <button id="btn-prev-level" class="level-nav-btn" title="Предыдущий лабиринт">◄</button>
+          <div>
+            <span class="label">ЛАБИРИНТ</span>
+            <span class="value" id="current-level">01</span>
+          </div>
+          <button id="btn-next-level" class="level-nav-btn" title="Следующий лабиринт">►</button>
+        </div>
+        <div class="connection-indicator">
+          <span class="status-dot"></span> СМАРТФОН АКТИВЕН
+        </div>
+      </div>
+
+      <div class="hud-bottom">
+        <button id="btn-calibrate-desktop" class="glow-btn">Сбросить Угол</button>
+      </div>
+    </div>
+
+    <!-- Victory Overlay -->
+    <div id="victory-overlay" class="overlay hidden">
+      <div class="glass-panel text-center">
+        <h1 class="glow-text-victory">ПОБЕДА!</h1>
+        <p class="subtitle">Вы успешно прошли лабиринт!</p>
+        <button id="btn-restart" class="glow-btn">Играть снова</button>
+      </div>
+    </div>
+
+    <!-- Settings Button (Gear) -->
+    <button id="settings-trigger" class="settings-btn" title="Настройки">
+      <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+    </button>
+
+    <!-- Settings Panel -->
+    <div id="settings-panel" class="settings-drawer hidden">
+      <div class="settings-content glass-panel">
+        <div class="settings-header">
+          <h2>Настройки</h2>
+          <button id="settings-close" class="close-btn">&times;</button>
+        </div>
+        <div class="settings-body">
+          <!-- Slider: Camera Height -->
+          <div class="setting-item">
+            <div class="setting-label">
+              <span>Высота камеры</span>
+              <span id="val-camera-height">4.8</span>
+            </div>
+            <input type="range" id="slider-camera-height" min="1.0" max="15.0" step="0.1" value="4.8">
+          </div>
+          <!-- Slider: Camera Angle -->
+          <div class="setting-item">
+            <div class="setting-label">
+              <span>Угол камеры</span>
+              <span id="val-camera-angle">0.0</span>
+            </div>
+            <input type="range" id="slider-camera-angle" min="0.0" max="90.0" step="1.0" value="0.0">
+          </div>
+          <!-- Slider: Scene Height -->
+          <div class="setting-item">
+            <div class="setting-label">
+              <span>Высота сцены</span>
+              <span id="val-scene-height">0.0</span>
+            </div>
+            <input type="range" id="slider-scene-height" min="-5.0" max="5.0" step="0.1" value="0.0">
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script type="module" src="/src/desktop.ts"></script>
+</body>
+</html>
