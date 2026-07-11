@@ -470,8 +470,8 @@ function loadMazeAsset() {
 
   const floorMaterial = new THREE.MeshStandardMaterial({
     color: 0xddff68, // #ddff68 (requested color)
-    roughness: 0.3,  // updated: 0.3
-    metalness: 0.7,  // updated: 0.7
+    roughness: 0.8,  // high roughness to show diffuse color
+    metalness: 0.1,  // low metalness to prevent mirroring the white background
     side: THREE.DoubleSide // Render both sides in case normals are inverted in the model
   });
 
@@ -484,6 +484,16 @@ function loadMazeAsset() {
     // Apply PBR material to all meshes (FBX has no embedded textures)
     mazeGroup.traverse((child) => {
       if (child instanceof THREE.Mesh) {
+        if (!child.geometry.boundingBox) {
+          child.geometry.computeBoundingBox();
+        }
+        const size = new THREE.Vector3();
+        child.geometry.boundingBox.getSize(size);
+        debugLog(`Mesh "${child.name}": visible=${child.visible} scale=(${child.scale.x},${child.scale.y},${child.scale.z}) pos=(${child.position.x},${child.position.y},${child.position.z}) size=(${size.x.toFixed(2)},${size.y.toFixed(2)},${size.z.toFixed(2)})`);
+
+        // Force visibility to true in case it was exported as hidden from Blender
+        child.visible = true;
+
         const nameLower = child.name.toLowerCase();
         const isFloor = nameLower.includes('floor') || 
                         nameLower.includes('ground') || 
