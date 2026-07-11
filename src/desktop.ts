@@ -411,17 +411,62 @@ async function init() {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-  // Add Lights
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  // 1. Procedural HDRI Environment Map for reflections only
+  const pmremGenerator = new THREE.PMREMGenerator(renderer);
+  pmremGenerator.compileEquirectangularShader();
+
+  const envScene = new THREE.Scene();
+  const panelGeo = new THREE.BoxGeometry(100, 100, 1);
+  const panelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+  // Add bright light softbox panels for premium glossy metallic reflections
+  const panel1 = new THREE.Mesh(panelGeo, panelMat);
+  panel1.position.set(-300, 150, 0);
+  panel1.lookAt(0, 0, 0);
+  envScene.add(panel1);
+
+  const panel2 = new THREE.Mesh(panelGeo, panelMat);
+  panel2.position.set(300, 150, 0);
+  panel2.lookAt(0, 0, 0);
+  envScene.add(panel2);
+
+  const panel3 = new THREE.Mesh(panelGeo, panelMat);
+  panel3.position.set(0, 400, -200);
+  panel3.lookAt(0, 0, 0);
+  envScene.add(panel3);
+
+  const panel4 = new THREE.Mesh(panelGeo, panelMat);
+  panel4.position.set(0, 150, 300);
+  panel4.lookAt(0, 0, 0);
+  envScene.add(panel4);
+
+  const envTarget = pmremGenerator.fromScene(envScene);
+  scene.environment = envTarget.texture;
+  pmremGenerator.dispose();
+
+  // 2. Add Studio Lights (balanced so floor is well-lit and doesn't get dark or overexposed)
+  // Ambient fill light for base brightness
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
   scene.add(ambientLight);
 
-  const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+  // Key Light (main light casting shadows)
+  const mainLight = new THREE.DirectionalLight(0xffffff, 1.0);
   mainLight.position.set(20, 50, 10);
   mainLight.castShadow = true;
   mainLight.shadow.mapSize.width = 2048;
   mainLight.shadow.mapSize.height = 2048;
   mainLight.shadow.bias = -0.0005;
   scene.add(mainLight);
+
+  // Fill Light (soft light from the opposite side to brighten shadows)
+  const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+  fillLight.position.set(-20, 30, 10);
+  scene.add(fillLight);
+
+  // Rim Light (backlight highlighting edges of walls and floor)
+  const rimLight = new THREE.DirectionalLight(0xffffff, 0.3);
+  rimLight.position.set(0, 30, -20);
+  scene.add(rimLight);
 
   // Load the Maze asset
   currentLevelSpan.textContent = String(currentMazeIndex + 1).padStart(2, '0');
