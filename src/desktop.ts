@@ -535,6 +535,8 @@ function loadMazeAsset() {
     color: 0xddff68, // #ddff68 (requested color)
     roughness: 0.3,  // requested: 0.3
     metalness: 0.7,  // requested: 0.7
+    emissive: 0xddff68, // #ddff68 (same color emission)
+    emissiveIntensity: 0.15, // subtle glow
     side: THREE.DoubleSide // Render both sides in case normals are inverted in the model
   });
 
