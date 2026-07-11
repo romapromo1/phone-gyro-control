@@ -483,8 +483,11 @@ function loadMazeAsset() {
     // Apply PBR material to all meshes (FBX has no embedded textures)
     mazeGroup.traverse((child) => {
       if (child instanceof THREE.Mesh) {
-        // Apply different material to the floor vs walls
-        const isFloor = child.name.toLowerCase().includes('floor');
+        const nameLower = child.name.toLowerCase();
+        const isFloor = nameLower.includes('floor') || 
+                        nameLower.includes('ground') || 
+                        nameLower.includes('plane') || 
+                        nameLower.includes('cube.001');
         const activeMaterial = isFloor ? floorMaterial : mazeMaterial;
 
         // Handle multi-material meshes: apply active material to all slots
