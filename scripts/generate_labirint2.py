@@ -9,7 +9,7 @@ MAZE_TOTAL_SIZE = 35.6157  # Target size of the maze in meters
 CELL_SIZE = MAZE_TOTAL_SIZE / GRID_SIZE  # ~3.56157 m per cell
 WALL_THICKNESS = 0.4678  # exact Cube.003 thickness
 WALL_HEIGHT = 0.9101     # exact Cube.003 height
-OUTER_WALL_THICKNESS = 0.4678  # exact Cube.003 thickness for borders
+OUTER_WALL_THICKNESS = 0.4678
 
 # Output directory
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +25,9 @@ def clear_scene():
     for block in bpy.data.meshes:
         if block.users == 0:
             bpy.data.meshes.remove(block)
+    for block in bpy.data.curves:
+        if block.users == 0:
+            bpy.data.curves.remove(block)
     for block in bpy.data.materials:
         if block.users == 0:
             bpy.data.materials.remove(block)
@@ -79,148 +82,6 @@ def generate_maze(rows, cols, seed=2026):
             
     return cells
 
-# Template duplicating function
-def create_wall_segment_from_template(wall_template, x, y, z, length, thickness, height, rotation_z, name):
-    obj = wall_template.copy()
-    obj.data = wall_template.data.copy()  # Unlinked duplicate to allow transform_apply
-    obj.name = name
-    bpy.context.scene.collection.objects.link(obj)
-    
-    obj.location = (x, y, z)
-    obj.rotation_euler = (0, 0, rotation_z)
-    
-    # Template dimensions in meters: X=2.2985, Y=0.4678, Z=0.9101
-    obj.scale = (length / 2.2985, thickness / 0.4678, height / 0.9101)
-    
-    # Apply scale and rotation
-    bpy.context.view_layer.objects.active = obj
-    obj.select_set(True)
-    bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
-    obj.select_set(False)
-    
-    return obj
-
-def build_maze_model(cells, wall_template, maze_name="labirint2"):
-    rows = len(cells)
-    cols = len(cells[0])
-    
-    # Unlink template from selection during creation
-    wall_template.select_set(False)
-    
-    wall_objs = []
-    
-    offset_x = -MAZE_TOTAL_SIZE / 2
-    offset_y = -MAZE_TOTAL_SIZE / 2
-    
-    # 1. Create outer walls
-    # Top
-    w = create_wall_segment_from_template(
-        wall_template, 0, MAZE_TOTAL_SIZE / 2 + OUTER_WALL_THICKNESS / 2, WALL_HEIGHT / 2,
-        MAZE_TOTAL_SIZE + OUTER_WALL_THICKNESS * 2, OUTER_WALL_THICKNESS, WALL_HEIGHT,
-        0, f"{maze_name}_outer_top"
-    )
-    wall_objs.append(w)
-    
-    # Bottom
-    w = create_wall_segment_from_template(
-        wall_template, 0, -(MAZE_TOTAL_SIZE / 2 + OUTER_WALL_THICKNESS / 2), WALL_HEIGHT / 2,
-        MAZE_TOTAL_SIZE + OUTER_WALL_THICKNESS * 2, OUTER_WALL_THICKNESS, WALL_HEIGHT,
-        0, f"{maze_name}_outer_bottom"
-    )
-    wall_objs.append(w)
-    
-    # Left (rotated 90 degrees)
-    w = create_wall_segment_from_template(
-        wall_template, -(MAZE_TOTAL_SIZE / 2 + OUTER_WALL_THICKNESS / 2), 0, WALL_HEIGHT / 2,
-        MAZE_TOTAL_SIZE, OUTER_WALL_THICKNESS, WALL_HEIGHT,
-        math.radians(90), f"{maze_name}_outer_left"
-    )
-    wall_objs.append(w)
-    
-    # Right (rotated 90 degrees)
-    w = create_wall_segment_from_template(
-        wall_template, MAZE_TOTAL_SIZE / 2 + OUTER_WALL_THICKNESS / 2, 0, WALL_HEIGHT / 2,
-        MAZE_TOTAL_SIZE, OUTER_WALL_THICKNESS, WALL_HEIGHT,
-        math.radians(90), f"{maze_name}_outer_right"
-    )
-    wall_objs.append(w)
-    
-    # 2. Create internal walls
-    wall_count = 0
-    for r in range(rows):
-        for c in range(cols):
-            cell_x = offset_x + c * CELL_SIZE + CELL_SIZE / 2
-            cell_y = offset_y + r * CELL_SIZE + CELL_SIZE / 2
-            
-            # Draw top and right walls of cell if they exist
-            if cells[r][c]['top'] and r > 0:  # Skip boundary
-                w = create_wall_segment_from_template(
-                    wall_template, cell_x, cell_y - CELL_SIZE / 2, WALL_HEIGHT / 2,
-                    CELL_SIZE + WALL_THICKNESS, WALL_THICKNESS, WALL_HEIGHT,
-                    0, f"{maze_name}_wall_h_{wall_count}"
-                )
-                wall_objs.append(w)
-                wall_count += 1
-                
-            if cells[r][c]['right'] and c < cols - 1:  # Skip boundary
-                w = create_wall_segment_from_template(
-                    wall_template, cell_x + CELL_SIZE / 2, cell_y, WALL_HEIGHT / 2,
-                    CELL_SIZE + WALL_THICKNESS, WALL_THICKNESS, WALL_HEIGHT,
-                    math.radians(90), f"{maze_name}_wall_v_{wall_count}"
-                )
-                wall_objs.append(w)
-                wall_count += 1
-                
-    return wall_objs
-
-def finalize_walls(wall_objs, final_name="labirint2"):
-    """Union the segments and apply Bevel to vertical corners only, leaving the profile untouched."""
-    if not wall_objs:
-        return None
-        
-    main_obj = wall_objs[0]
-    bpy.context.view_layer.objects.active = main_obj
-    
-    print("Performing boolean union on segments...")
-    # Perform boolean union in a loop using FAST solver to merge segments into a clean low-poly mesh
-    for i, obj in enumerate(wall_objs[1:]):
-        bool_mod = main_obj.modifiers.new(name=f"Union_{i}", type='BOOLEAN')
-        bool_mod.operation = 'UNION'
-        bool_mod.object = obj
-        bool_mod.solver = 'FLOAT'
-        
-        bpy.ops.object.modifier_apply(modifier=bool_mod.name)
-        bpy.data.objects.remove(obj, do_unlink=True)
-        
-    # Set final name
-    main_obj.name = f"{final_name}_walls"
-    
-    # Weld/Merge vertices at the junctions
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.remove_doubles(threshold=0.01)
-    bpy.ops.object.mode_set(mode='OBJECT')
-    
-    # Add Bevel Modifier to round the vertical corners
-    print("Adding bevel modifier for vertical corner radii...")
-    bevel_mod = main_obj.modifiers.new(name="BevelCorners", type='BEVEL')
-    bevel_mod.width = 1.0  # 1 meter radius for inner and outer turns
-    bevel_mod.segments = 5
-    bevel_mod.limit_method = 'ANGLE'
-    # 70 degrees ensures it only bevels vertical 90-degree junctions, leaving the wall profile steps intact
-    bevel_mod.angle_limit = math.radians(70)
-    
-    bpy.ops.object.modifier_apply(modifier=bevel_mod.name)
-    
-    # Shade smooth
-    bpy.ops.object.shade_smooth()
-    
-    # Assign material
-    mat_walls = bpy.data.materials.new(name="WallsMaterial")
-    main_obj.data.materials.append(mat_walls)
-    
-    return main_obj
-
 def export_fbx(filepath):
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.export_scene.fbx(
@@ -240,42 +101,157 @@ def export_fbx(filepath):
 
 def main():
     print("\n" + "=" * 60)
-    print("GENERATING ROUNDED OPTIMIZED LABIRINT2 (35.6157 m)")
+    print("GENERATING ROUNDED CURVE-SWEEP LABIRINT2 (35.6157 m)")
     print("=" * 60)
     
     clear_scene()
     
-    # Load user's updated forma.fbx
+    # 1. Load user's updated forma.fbx
     print(f"Loading template model from: {FORMA_PATH}")
     bpy.ops.import_scene.fbx(filepath=FORMA_PATH)
     
     wall_template = bpy.data.objects.get("Cube.003")
-    
     if not wall_template:
         print("Error: Could not find 'Cube.003' in template FBX.")
         return
         
-    # Generate floor programmatically with exact dimensions from forma.fbx
-    print("Creating floor mesh programmatically...")
+    # 2. Extract Y-Z profile vertices from Cube.003 at one of the ends (X > 0)
+    verts_2d = []
+    for v in wall_template.data.vertices:
+        if v.co.x > 0:
+            verts_2d.append((v.co.y, v.co.z))
+            
+    # Deduplicate extracted profile vertices
+    unique_verts = []
+    for p in verts_2d:
+        if not any(math.isclose(p[0], u[0], abs_tol=1e-4) and math.isclose(p[1], u[1], abs_tol=1e-4) for u in unique_verts):
+            unique_verts.append(p)
+            
+    # Sort vertices in circular order around centroid to form a closed shape
+    cx = sum(p[0] for p in unique_verts) / len(unique_verts)
+    cy = sum(p[1] for p in unique_verts) / len(unique_verts)
+    unique_verts.sort(key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
+    
+    # Create the profile curve object
+    profile_data = bpy.data.curves.new(name="WallProfile", type='CURVE')
+    profile_data.dimensions = '2D'
+    profile_obj = bpy.data.objects.new("WallProfile", profile_data)
+    bpy.context.scene.collection.objects.link(profile_obj)
+    
+    spline = profile_data.splines.new(type='POLY')
+    spline.points.add(len(unique_verts) - 1)
+    for i, p in enumerate(unique_verts):
+        spline.points[i].co = (p[0], p[1], 0, 1)
+    spline.use_cyclic_u = True
+    
+    # Delete the imported wall template mesh
+    bpy.data.objects.remove(wall_template, do_unlink=True)
+    
+    # 3. Create programmatic floor mesh
+    print("Creating floor mesh...")
     bpy.ops.mesh.primitive_cube_add(size=1, location=(0, 0, -0.3668 / 2))
     floor_obj = bpy.context.active_object
     floor_obj.name = "labirint2_floor"
     floor_obj.scale = (34.6776, 35.6143, 0.3668)
     bpy.ops.object.transform_apply(scale=True)
     
-    # Generate maze layout
+    # 4. Generate maze grid layout
     cells = generate_maze(GRID_SIZE, GRID_SIZE, seed=2026)
     
-    # Build 3D model
-    print("Assembling wall pieces...")
-    wall_objs = build_maze_model(cells, wall_template, "labirint2")
+    # 5. Build 2D centerline path mesh
+    print("Assembling 2D centerline paths...")
+    path_mesh = bpy.data.meshes.new(name="MazePath")
+    path_obj = bpy.data.objects.new("MazePath", path_mesh)
+    bpy.context.scene.collection.objects.link(path_obj)
     
-    # Remove the template object
-    bpy.data.objects.remove(wall_template, do_unlink=True)
+    verts = []
+    edges = []
+    vert_map = {}
     
-    # Join walls and bevel vertical corners only (low poly, optimized)
-    print("Joining and beveling walls...")
-    joined_walls = finalize_walls(wall_objs, "labirint2")
+    def get_vertex(x, y):
+        key = (round(x, 4), round(y, 4))
+        if key not in vert_map:
+            vert_map[key] = len(verts)
+            verts.append((x, y, WALL_HEIGHT / 2)) # set path Z height to half wall height
+        return vert_map[key]
+        
+    offset_x = -MAZE_TOTAL_SIZE / 2
+    offset_y = -MAZE_TOTAL_SIZE / 2
+    
+    # Outer boundaries
+    # Top wall
+    for c in range(GRID_SIZE):
+        v1 = get_vertex(offset_x + c * CELL_SIZE, offset_y + GRID_SIZE * CELL_SIZE)
+        v2 = get_vertex(offset_x + (c+1) * CELL_SIZE, offset_y + GRID_SIZE * CELL_SIZE)
+        edges.append((v1, v2))
+    # Bottom wall
+    for c in range(GRID_SIZE):
+        v1 = get_vertex(offset_x + c * CELL_SIZE, offset_y)
+        v2 = get_vertex(offset_x + (c+1) * CELL_SIZE, offset_y)
+        edges.append((v1, v2))
+    # Left wall
+    for r in range(GRID_SIZE):
+        v1 = get_vertex(offset_x, offset_y + r * CELL_SIZE)
+        v2 = get_vertex(offset_x, offset_y + (r+1) * CELL_SIZE)
+        edges.append((v1, v2))
+    # Right wall
+    for r in range(GRID_SIZE):
+        v1 = get_vertex(offset_x + GRID_SIZE * CELL_SIZE, offset_y + r * CELL_SIZE)
+        v2 = get_vertex(offset_x + GRID_SIZE * CELL_SIZE, offset_y + (r+1) * CELL_SIZE)
+        edges.append((v1, v2))
+        
+    # Internal boundaries
+    for r in range(GRID_SIZE):
+        for c in range(GRID_SIZE):
+            if cells[r][c]['top'] and r > 0:
+                v1 = get_vertex(offset_x + c * CELL_SIZE, offset_y + r * CELL_SIZE)
+                v2 = get_vertex(offset_x + (c+1) * CELL_SIZE, offset_y + r * CELL_SIZE)
+                edges.append((v1, v2))
+            if cells[r][c]['right'] and c < GRID_SIZE - 1:
+                v1 = get_vertex(offset_x + (c+1) * CELL_SIZE, offset_y + r * CELL_SIZE)
+                v2 = get_vertex(offset_x + (c+1) * CELL_SIZE, offset_y + (r+1) * CELL_SIZE)
+                edges.append((v1, v2))
+                
+    path_mesh.from_pydata(verts, edges, [])
+    path_mesh.update()
+    
+    # 6. Bevel vertices in Edit Mode to create rounded corners at turns
+    print("Beveling corners...")
+    bpy.context.view_layer.objects.active = path_obj
+    path_obj.select_set(True)
+    
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    # Bevel vertices with 1.0m radius (5 segments) to round the 90-degree corners
+    bpy.ops.mesh.bevel(offset=1.0, segments=5, affect='VERTICES')
+    bpy.ops.object.mode_set(mode='OBJECT')
+    
+    # 7. Convert beveled path mesh into a Curve
+    print("Converting path to curve and sweeping profile...")
+    bpy.ops.object.convert(target='CURVE')
+    path_curve_obj = bpy.context.active_object
+    path_curve_data = path_curve_obj.data
+    
+    # Set up curve extrusion options using the profile curve
+    path_curve_data.dimensions = '3D'
+    path_curve_data.fill_mode = 'FULL'
+    path_curve_data.bevel_mode = 'OBJECT'
+    path_curve_data.bevel_object = profile_obj
+    path_curve_data.use_fill_caps = True
+    
+    # 8. Convert swept curve back to final low-poly Mesh
+    print("Converting curve back to mesh...")
+    bpy.ops.object.convert(target='MESH')
+    joined_walls = bpy.context.active_object
+    joined_walls.name = "labirint2_walls"
+    
+    # Clean up profile curve template
+    bpy.data.objects.remove(profile_obj, do_unlink=True)
+    
+    # Shade smooth and assign material
+    bpy.ops.object.shade_smooth()
+    mat_walls = bpy.data.materials.new(name="WallsMaterial")
+    joined_walls.data.materials.append(mat_walls)
     
     # Re-apply floor material slot
     mat_floor = bpy.data.materials.new(name="FloorMaterial")
@@ -291,7 +267,7 @@ def main():
     export_fbx(output_path)
     
     print("\n" + "=" * 60)
-    print("NEW OPTIMIZED LABIRINT2 GENERATED SUCCESSFULLY!")
+    print("ROUNDED OPTIMIZED LABIRINT2 COMPLETED SUCCESSFULLY!")
     print("=" * 60)
 
 if __name__ == "__main__":
