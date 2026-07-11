@@ -471,7 +471,8 @@ function loadMazeAsset() {
   const floorMaterial = new THREE.MeshStandardMaterial({
     color: 0xddff68, // #ddff68 (requested color)
     roughness: 0.3,  // updated: 0.3
-    metalness: 0.7   // updated: 0.7
+    metalness: 0.7,  // updated: 0.7
+    side: THREE.DoubleSide // Render both sides in case normals are inverted in the model
   });
 
   loader.load(mazeFile + '?v=' + v, (fbx) => {
@@ -482,7 +483,6 @@ function loadMazeAsset() {
 
     // Apply PBR material to all meshes (FBX has no embedded textures)
     mazeGroup.traverse((child) => {
-      debugLog(`Child in FBX: name="${child.name}", type="${child.type}", isMesh=${child instanceof THREE.Mesh}`);
       if (child instanceof THREE.Mesh) {
         const nameLower = child.name.toLowerCase();
         const isFloor = nameLower.includes('floor') || 
