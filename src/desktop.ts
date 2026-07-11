@@ -27,9 +27,7 @@ const btnNextLevel = document.getElementById('btn-next-level') as HTMLButtonElem
 // Maze level management
 const MAZE_FILES = [
   '/source/labirint.fbx',
-  '/source/labirint_2.fbx',
-  '/source/labirint_3.fbx',
-  '/source/labirint_4.fbx'
+  '/source/labirint2.fbx'
 ];
 let currentMazeIndex = 0;
 let isAnimating = false; // prevent calling animate() multiple times
