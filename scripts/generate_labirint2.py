@@ -1,61 +1,76 @@
 import bpy
 import math
-import os
 import random
+import os
 
 # === CONFIGURATION ===
-GRID_SIZE = 10          # 10x10 cell grid
-MAZE_TOTAL_SIZE = 35.6157  # Total maze size in meters (exact user size!)
-CELL_SIZE = MAZE_TOTAL_SIZE / GRID_SIZE  # ~3.56 meters per cell
-WALL_THICKNESS = 0.4678     # Wall thickness (exact Y thickness of Cube.003)
-WALL_HEIGHT = 0.9101       # Wall height (exact Z height of Cube.003)
-OUTER_WALL_THICKNESS = 0.4678  # Outer border thickness (exact Y thickness of Cube.003)
-CORNER_RADIUS = 1.4         # Large radius for smooth sweeping corners
+GRID_SIZE = 10
+MAZE_TOTAL_SIZE = 35.6  # Match Level 1 scale (35.6 units total width)
+CELL_SIZE = MAZE_TOTAL_SIZE / GRID_SIZE  # 3.56 units per cell
+WALL_HEIGHT = 0.91
+FLOOR_THICKNESS = 0.37
+FILLET_RADIUS = 1.17  # 1.5 * ball_radius (ball_radius is 0.78 units in this scale)
+OUTER_WALL_THICKNESS = 0.45
+LINK_LENGTH = 0.3     # Chain link segment length for smooth bending and low vertex count
 
-# Output directory
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "public", "source")
-FORMA_PATH = r"C:\Users\RocketPC\Downloads\forma.fbx"
+FORMA_FBX = os.path.join(OUTPUT_DIR, "forma.fbx")
+OUTPUT_FBX = os.path.join(OUTPUT_DIR, "labirint2.fbx")
 
-def clear_scene():
-    """Remove all objects from the scene."""
+def clear_scene_except_profile():
+    """Remove all objects from the scene except the profile object."""
     bpy.ops.object.select_all(action='SELECT')
+    # Keep Cube.003 if it already exists, otherwise we will load it
+    profile_exists = "Cube.003" in bpy.data.objects
+    for obj in bpy.context.scene.objects:
+        if obj.name != "Cube.003":
+            obj.select_set(True)
+        else:
+            obj.select_set(False)
     bpy.ops.object.delete(use_global=False)
-    
-    # Clear orphan data
-    for block in bpy.data.meshes:
-        if block.users == 0:
-            bpy.data.meshes.remove(block)
-    for block in bpy.data.materials:
-        if block.users == 0:
-            bpy.data.materials.remove(block)
+    return profile_exists
 
-# === MAZE GENERATION ===
-def generate_maze(rows, cols, seed=2026):
-    """Generate a maze using recursive backtracking (DFS)."""
+def load_profile():
+    """Load the profile Cube.003 from forma.fbx."""
+    if "Cube.003" not in bpy.data.objects:
+        print(f"Loading profile from {FORMA_FBX}...")
+        bpy.ops.import_scene.fbx(filepath=FORMA_FBX)
+    
+    profile = bpy.data.objects.get("Cube.003")
+    if not profile:
+        raise Exception("Cube.003 profile not found in forma.fbx!")
+    
+    # Make sure scale and rotation are applied
+    bpy.ops.object.select_all(action='DESELECT')
+    profile.select_set(True)
+    bpy.context.view_layer.objects.active = profile
+    # Scale X to LINK_LENGTH to optimize vertex count and support smooth bending
+    profile.scale = (LINK_LENGTH / 2.2985, 1.0, 1.0)
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    profile.select_set(False)
+    return profile
+
+def generate_maze_grid(seed=123):
+    """Generate a 10x10 maze layout using DFS."""
     random.seed(seed)
     cells = [[{'top': True, 'right': True, 'bottom': True, 'left': True, 'visited': False}
-              for _ in range(cols)] for _ in range(rows)]
-    
+              for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
     directions = [
         ('top', -1, 0, 'bottom'),
         ('right', 0, 1, 'left'),
         ('bottom', 1, 0, 'top'),
         ('left', 0, -1, 'right')
     ]
-    
     stack = [(0, 0)]
     cells[0][0]['visited'] = True
-    
     while stack:
         r, c = stack[-1]
         neighbors = []
-        
         for wall, dr, dc, opposite in directions:
             nr, nc = r + dr, c + dc
-            if 0 <= nr < rows and 0 <= nc < cols and not cells[nr][nc]['visited']:
+            if 0 <= nr < GRID_SIZE and 0 <= nc < GRID_SIZE and not cells[nr][nc]['visited']:
                 neighbors.append((wall, nr, nc, opposite))
-        
         if neighbors:
             wall, nr, nc, opposite = random.choice(neighbors)
             cells[r][c][wall] = False
@@ -65,328 +80,307 @@ def generate_maze(rows, cols, seed=2026):
         else:
             stack.pop()
             
-    # Remove some extra walls to make multiple paths
-    extra_removals = int(rows * cols * 0.08)
-    for _ in range(extra_removals):
-        r = random.randint(0, rows - 2)
-        c = random.randint(0, cols - 2)
-        direction = random.choice(['right', 'bottom'])
-        if direction == 'right' and c < cols - 1:
+    # Remove some extra walls to create multiple paths
+    for _ in range(int(GRID_SIZE * GRID_SIZE * 0.08)):
+        r = random.randint(0, GRID_SIZE - 2)
+        c = random.randint(0, GRID_SIZE - 2)
+        if random.choice([True, False]):
             cells[r][c]['right'] = False
-            cells[r][c + 1]['left'] = False
-        elif direction == 'bottom' and r < rows - 1:
+            cells[r][c+1]['left'] = False
+        else:
             cells[r][c]['bottom'] = False
-            cells[r + 1][c]['top'] = False
+            cells[r+1][c]['top'] = False
             
     return cells
 
-def build_maze_skeleton_mesh(cells):
-    """Build a 2D line mesh representing all the wall paths."""
-    rows = len(cells)
-    cols = len(cells[0])
+def get_wall_edges(cells):
+    """Decompose the maze walls into a set of grid edges."""
+    active_edges = set()
     
-    offset_x = -MAZE_TOTAL_SIZE / 2
-    offset_y = -MAZE_TOTAL_SIZE / 2
-    
-    vertices = []
-    edges = []
-    vertex_map = {}
-    
-    def add_vertex(pt):
-        pt_rounded = (round(pt[0], 5), round(pt[1], 5))
-        if pt_rounded not in vertex_map:
-            vertex_map[pt_rounded] = len(vertices)
-            vertices.append((pt[0], pt[1], 0.0))
-        return vertex_map[pt_rounded]
+    # Outer border edges
+    for c in range(GRID_SIZE):
+        active_edges.add(frozenset({(c, 0), (c + 1, 0)})) # Bottom
+        active_edges.add(frozenset({(c, GRID_SIZE), (c + 1, GRID_SIZE)})) # Top
+    for r in range(GRID_SIZE):
+        active_edges.add(frozenset({(0, r), (0, r + 1)})) # Left
+        active_edges.add(frozenset({(GRID_SIZE, r), (GRID_SIZE, r + 1)})) # Right
         
-    def add_edge(pt1, pt2):
-        idx1 = add_vertex(pt1)
-        idx2 = add_vertex(pt2)
-        edges.append((idx1, idx2))
+    # Internal edges
+    for r in range(GRID_SIZE):
+        for c in range(GRID_SIZE):
+            if cells[r][c]['right'] and c < GRID_SIZE - 1:
+                active_edges.add(frozenset({(c + 1, r), (c + 1, r + 1)}))
+            if cells[r][c]['top'] and r > 0:
+                active_edges.add(frozenset({(c, r), (c + 1, r)}))
+                
+    return active_edges
 
-    # 1. Create inner wall paths (each wall is a single line edge)
-    for r in range(rows):
-        for c in range(cols):
-            cell_x = offset_x + c * CELL_SIZE + CELL_SIZE / 2
-            cell_y = offset_y + r * CELL_SIZE + CELL_SIZE / 2
+def extract_non_branching_paths(edges_set):
+    """Trace the edges into a list of continuous, non-branching paths (splines)."""
+    edges = set(edges_set)
+    paths = []
+    
+    while edges:
+        valences = {}
+        for e in edges:
+            for v in e:
+                valences[v] = valences.get(v, 0) + 1
+        
+        # Start at an endpoint (valence 1) or a junction (valence 3+)
+        start_v = None
+        for v, val in valences.items():
+            if val == 1 or val == 3:
+                start_v = v
+                break
+        if start_v is None:
+            start_v = list(valences.keys())[0]
             
-            if cells[r][c]['top'] and r > 0:  # Skip boundary
-                add_edge(
-                    (cell_x - CELL_SIZE / 2, cell_y - CELL_SIZE / 2),
-                    (cell_x + CELL_SIZE / 2, cell_y - CELL_SIZE / 2)
-                )
-                
-            if cells[r][c]['right'] and c < cols - 1:  # Skip boundary
-                add_edge(
-                    (cell_x + CELL_SIZE / 2, cell_y - CELL_SIZE / 2),
-                    (cell_x + CELL_SIZE / 2, cell_y + CELL_SIZE / 2)
-                )
-                
-    # Create the 2D skeleton mesh object
-    mesh_data = bpy.data.meshes.new("MazeSkeleton")
-    mesh_data.from_pydata(vertices, edges, [])
-    mesh_obj = bpy.data.objects.new("MazeSkeletonObj", mesh_data)
-    bpy.context.scene.collection.objects.link(mesh_obj)
-    
-    # 2. Select internal vertices to bevel them (keeps outer corners sharp)
-    bpy.context.view_layer.objects.active = mesh_obj
-    bpy.ops.object.mode_set(mode='OBJECT')
-    
-    # Select all vertices except those on the boundary
-    boundary_limit = MAZE_TOTAL_SIZE / 2 - 0.05
-    for v in mesh_obj.data.vertices:
-        is_internal = abs(v.co.x) < boundary_limit and abs(v.co.y) < boundary_limit
-        v.select = is_internal
-        
-    # Bevel the selected internal vertices to round the corners
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.bevel(affect='VERTICES', offset=CORNER_RADIUS, segments=8)
-    bpy.ops.object.mode_set(mode='OBJECT')
-    
-    return mesh_obj
+        path = [start_v]
+        current_v = start_v
+        while True:
+            next_edge = None
+            for e in edges:
+                if current_v in e:
+                    next_edge = e
+                    break
+            if next_edge is None:
+                break
+            
+            next_v = list(next_edge - {current_v})[0]
+            path.append(next_v)
+            edges.remove(next_edge)
+            
+            # Stop path at branches to avoid junctions in a single Curve
+            v_val = valences.get(next_v, 0)
+            if v_val > 2:
+                break
+            current_v = next_v
+            
+        if len(path) > 1:
+            paths.append(path)
+            
+    return paths
 
-def build_profile_curve(wall_template):
-    """Extract Y-Z profile points from Cube.003 and build a 2D Curve."""
-    verts = [v.co for v in wall_template.data.vertices if v.co.x > 0.0]
-    
-    # Calculate center of profile
-    center_y = sum(v.y for v in verts) / len(verts)
-    center_z = sum(v.z for v in verts) / len(verts)
-    
-    # Sort vertices by angle around center to form a closed loop
-    verts.sort(key=lambda v: math.atan2(v.z - center_z, v.y - center_y))
-    
-    # Build 2D Curve
-    profile_curve = bpy.data.curves.new(name="ProfileCurve", type='CURVE')
-    profile_curve.dimensions = '2D'
-    
-    profile_spline = profile_curve.splines.new(type='POLY')
-    profile_spline.use_cyclic_u = True
-    profile_spline.points.add(len(verts) - 1)
-    
-    for idx, v in enumerate(verts):
-        profile_spline.points[idx].co = (v.y, v.z, 0.0, 1.0)
+def round_path_corners(path, R):
+    """
+    Fillet/round the corners of a 2D path.
+    Replaces corner points with Bezier curve control points and handles to form circular arcs.
+    """
+    # Convert grid points to Blender coordinates
+    offset = -MAZE_TOTAL_SIZE / 2
+    points = []
+    for (c, r) in path:
+        x = offset + c * CELL_SIZE
+        y = offset + r * CELL_SIZE
+        points.append((x, y, 0.0))
         
-    profile_obj = bpy.data.objects.new("ProfileObj", profile_curve)
-    bpy.context.scene.collection.objects.link(profile_obj)
+    if len(points) <= 2:
+        # Straight line, no corners to round
+        return [(p, 'VECTOR', p, p) for p in points]
+        
+    rounded_points = []
+    # Start point
+    rounded_points.append((points[0], 'VECTOR', points[0], points[0]))
     
-    return profile_obj
+    # Process intermediate corner points
+    for i in range(1, len(points) - 1):
+        p_prev = points[i - 1]
+        p_curr = points[i]
+        p_next = points[i + 1]
+        
+        # Vectors
+        v_in = [p_prev[0] - p_curr[0], p_prev[1] - p_curr[1]]
+        v_out = [p_next[0] - p_curr[0], p_next[1] - p_curr[1]]
+        
+        len_in = math.sqrt(v_in[0]**2 + v_in[1]**2)
+        len_out = math.sqrt(v_out[0]**2 + v_out[1]**2)
+        
+        # Check if collinear
+        cross_prod = v_in[0]*v_out[1] - v_in[1]*v_out[0]
+        is_corner = abs(cross_prod) > 1e-3
+        
+        if is_corner:
+            u_in = [v_in[0]/len_in, v_in[1]/len_in]
+            u_out = [v_out[0]/len_out, v_out[1]/len_out]
+            
+            # Limit R to half segment length
+            actual_R = min(R, len_in * 0.45, len_out * 0.45)
+            
+            # Fillet points
+            pt_in = (p_curr[0] + u_in[0]*actual_R, p_curr[1] + u_in[1]*actual_R, 0.0)
+            pt_out = (p_curr[0] + u_out[0]*actual_R, p_curr[1] + u_out[1]*actual_R, 0.0)
+            
+            # Handle lengths (standard Bezier circular approximation factor)
+            handle_len = actual_R * 0.55228
+            
+            # Handles pointing towards the corner
+            h_in_right = (pt_in[0] - u_in[0]*handle_len, pt_in[1] - u_in[1]*handle_len, 0.0)
+            h_in_left = (pt_in[0] + u_in[0]*handle_len, pt_in[1] + u_in[1]*handle_len, 0.0)
+            
+            h_out_left = (pt_out[0] - u_out[0]*handle_len, pt_out[1] - u_out[1]*handle_len, 0.0)
+            h_out_right = (pt_out[0] + u_out[0]*handle_len, pt_out[1] + u_out[1]*handle_len, 0.0)
+            
+            # Add fillet start
+            rounded_points.append((pt_in, 'FREE', h_in_left, h_in_right))
+            # Add fillet end
+            rounded_points.append((pt_out, 'FREE', h_out_left, h_out_right))
+        else:
+            # Collinear point
+            rounded_points.append((p_curr, 'VECTOR', p_curr, p_curr))
+            
+    # End point
+    rounded_points.append((points[-1], 'VECTOR', points[-1], points[-1]))
+    
+    return rounded_points
 
-def create_outer_walls_sharp(wall_template, maze_name):
-    """Build the outer frame with sharp corners from Cube.003."""
-    outer_objs = []
+def build_curve_from_path(rounded_points, name="wall_curve"):
+    """Create a Blender Bezier curve from rounded points."""
+    curve_data = bpy.data.curves.new(name=name, type='CURVE')
+    curve_data.dimensions = '3D'
+    curve_data.fill_mode = 'FULL'
     
-    # Top
-    w = create_wall_segment_from_template(
-        wall_template, 0, MAZE_TOTAL_SIZE / 2 + OUTER_WALL_THICKNESS / 2, WALL_HEIGHT / 2,
-        MAZE_TOTAL_SIZE + OUTER_WALL_THICKNESS * 2, OUTER_WALL_THICKNESS, WALL_HEIGHT,
-        0, f"{maze_name}_outer_top"
+    spline = curve_data.splines.new(type='BEZIER')
+    spline.bezier_points.add(len(rounded_points) - 1)
+    
+    for i, (co, h_type, hl, hr) in enumerate(rounded_points):
+        bp = spline.bezier_points[i]
+        bp.co = co
+        bp.handle_left = hl
+        bp.handle_right = hr
+        bp.handle_left_type = h_type
+        bp.handle_right_type = h_type
+        
+    obj = bpy.data.objects.new(name, curve_data)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+def build_maze_walls(paths, profile):
+    """Build the final wall meshes by deforming the profile Cube.003 along the paths."""
+    wall_objects = []
+    
+    for idx, path in enumerate(paths):
+        # Round the path
+        rounded = round_path_corners(path, FILLET_RADIUS)
+        
+        # Create curve
+        curve = build_curve_from_path(rounded, name=f"curve_{idx}")
+        
+        # Duplicate profile mesh
+        wall_mesh = profile.copy()
+        wall_mesh.data = profile.data.copy()
+        wall_mesh.name = f"wall_mesh_{idx}"
+        wall_mesh.hide_viewport = False
+        wall_mesh.hide_render = False
+        bpy.context.scene.collection.objects.link(wall_mesh)
+        
+        # Position at curve origin (0, 0, 0)
+        wall_mesh.location = (0, 0, 0)
+        wall_mesh.rotation_euler = (0, 0, 0)
+        wall_mesh.scale = (1, 1, 1)
+        
+        # Add Array modifier
+        arr = wall_mesh.modifiers.new(name="Array", type='ARRAY')
+        arr.fit_type = 'FIT_CURVE'
+        arr.curve = curve
+        # Offset along X (which is the length axis of Cube.003)
+        arr.relative_offset_displace = (1.0, 0.0, 0.0)
+        arr.use_merge_vertices = True
+        arr.merge_threshold = 0.01
+        
+        # Add Curve modifier
+        curv_mod = wall_mesh.modifiers.new(name="Curve", type='CURVE')
+        curv_mod.object = curve
+        curv_mod.deform_axis = 'POS_X'
+        
+        # Update view layer to synchronize the new objects
+        bpy.context.view_layer.update()
+        
+        # Select and set active
+        bpy.ops.object.select_all(action='DESELECT')
+        bpy.context.view_layer.objects.active = wall_mesh
+        wall_mesh.select_set(True)
+        
+        # Apply modifiers
+        bpy.ops.object.modifier_apply(modifier="Array")
+        bpy.ops.object.modifier_apply(modifier="Curve")
+        
+        wall_objects.append(wall_mesh)
+        
+        # Delete temporary curve
+        bpy.ops.object.select_all(action='DESELECT')
+        curve.select_set(True)
+        bpy.ops.object.delete()
+        
+    return wall_objects
+
+def create_floor():
+    """Create the floor plate."""
+    bpy.ops.mesh.primitive_cube_add(
+        size=1,
+        location=(0, 0, -FLOOR_THICKNESS / 2)
     )
-    outer_objs.append(w)
-    
-    # Bottom
-    w = create_wall_segment_from_template(
-        wall_template, 0, -(MAZE_TOTAL_SIZE / 2 + OUTER_WALL_THICKNESS / 2), WALL_HEIGHT / 2,
-        MAZE_TOTAL_SIZE + OUTER_WALL_THICKNESS * 2, OUTER_WALL_THICKNESS, WALL_HEIGHT,
-        0, f"{maze_name}_outer_bottom"
-    )
-    outer_objs.append(w)
-    
-    # Left
-    w = create_wall_segment_from_template(
-        wall_template, -(MAZE_TOTAL_SIZE / 2 + OUTER_WALL_THICKNESS / 2), 0, WALL_HEIGHT / 2,
-        MAZE_TOTAL_SIZE, OUTER_WALL_THICKNESS, WALL_HEIGHT,
-        math.radians(90), f"{maze_name}_outer_left"
-    )
-    outer_objs.append(w)
-    
-    # Right
-    w = create_wall_segment_from_template(
-        wall_template, MAZE_TOTAL_SIZE / 2 + OUTER_WALL_THICKNESS / 2, 0, WALL_HEIGHT / 2,
-        MAZE_TOTAL_SIZE, OUTER_WALL_THICKNESS, WALL_HEIGHT,
-        math.radians(90), f"{maze_name}_outer_right"
-    )
-    outer_objs.append(w)
-    
-    # Join outer walls
-    bpy.ops.object.select_all(action='DESELECT')
-    for obj in outer_objs:
-        obj.select_set(True)
-    bpy.context.view_layer.objects.active = outer_objs[0]
-    bpy.ops.object.join()
-    
-    joined_outer = bpy.context.active_object
-    joined_outer.name = f"{maze_name}_outer_frame"
-    
-    return joined_outer
+    floor = bpy.context.active_object
+    floor.name = "labirint2_floor"
+    floor.scale = (MAZE_TOTAL_SIZE + OUTER_WALL_THICKNESS * 2, 
+                   MAZE_TOTAL_SIZE + OUTER_WALL_THICKNESS * 2, 
+                   FLOOR_THICKNESS)
+    bpy.ops.object.transform_apply(scale=True)
+    return floor
 
 def main():
     print("\n" + "=" * 60)
-    print("GENERATING NEW LABYRINTH 2 WITH HYBRID SMOOTH JUNCTIONS")
+    print("ROUNDED MAZE GENERATOR (labirint2)")
     print("=" * 60)
     
-    clear_scene()
+    # 1. Setup scene
+    clear_scene_except_profile()
+    profile = load_profile()
     
-    # 1. Load template FBX
-    print(f"Loading template model from: {FORMA_PATH}")
-    bpy.ops.import_scene.fbx(filepath=FORMA_PATH)
+    # Hide profile from export
+    profile.hide_viewport = True
+    profile.hide_render = True
     
-    wall_template = bpy.data.objects.get("Cube.003")
-    floor_obj = bpy.data.objects.get("floor")
+    # 2. Generate maze structure
+    cells = generate_maze_grid(seed=123)
+    edges = get_wall_edges(cells)
+    paths = extract_non_branching_paths(edges)
     
-    if not wall_template or not floor_obj:
-        print("Error: Could not find 'Cube.003' or 'floor' in template FBX.")
-        return
-        
-    # Scale floor to match overall size
-    floor_obj.name = "labirint2_floor"
-    floor_obj.location = (0, 0, -0.3668 / 2)
-    floor_obj.dimensions = (MAZE_TOTAL_SIZE + OUTER_WALL_THICKNESS * 2, 
-                            MAZE_TOTAL_SIZE + OUTER_WALL_THICKNESS * 2, 
-                            0.3668)
-    bpy.context.view_layer.objects.active = floor_obj
-    floor_obj.select_set(True)
-    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
-    floor_obj.select_set(False)
-
-    # 2. Extract profile curve
-    profile_obj = build_profile_curve(wall_template)
+    print(f"Generated {len(paths)} separate wall paths.")
     
-    # 3. Create outer sharp frame
-    print("Assembling sharp outer frame...")
-    outer_frame_mesh = create_outer_walls_sharp(wall_template, "labirint2")
-
-    # 4. Generate maze layout
-    cells = generate_maze(GRID_SIZE, GRID_SIZE, seed=2026)
+    # 3. Build wall objects
+    wall_objs = build_maze_walls(paths, profile)
     
-    # 5. Build 2D line skeleton with rounded internal turns
-    print("Generating rounded 2D inner skeleton...")
-    skeleton_mesh_obj = build_maze_skeleton_mesh(cells)
-    
-    # Convert skeleton mesh to Curve
+    # 4. Join all walls into one object
+    bpy.context.view_layer.update()
     bpy.ops.object.select_all(action='DESELECT')
-    skeleton_mesh_obj.select_set(True)
-    bpy.context.view_layer.objects.active = skeleton_mesh_obj
-    bpy.ops.object.convert(target='CURVE')
-    
-    maze_curve_obj = bpy.context.active_object
-    maze_curve_obj.name = "MazeInnerCurve"
-    
-    # Set custom profile sweep
-    maze_curve_obj.data.bevel_mode = 'OBJECT'
-    maze_curve_obj.data.bevel_object = profile_obj
-    maze_curve_obj.data.use_fill_caps = True
-    
-    # Convert curve sweep to 3D Mesh
-    bpy.ops.object.convert(target='MESH')
-    
-    # Position walls vertically on the floor (shifting up by half height)
-    maze_curve_obj.location.z = WALL_HEIGHT / 2
-    bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
-    
-    # 6. Delete template objects
-    bpy.data.objects.remove(wall_template, do_unlink=True)
-    bpy.data.objects.remove(profile_obj, do_unlink=True)
-    
-    # 7. Join inner rounded walls with outer frame
-    print("Merging inner walls and outer frame...")
-    bpy.ops.object.select_all(action='DESELECT')
-    maze_curve_obj.select_set(True)
-    outer_frame_mesh.select_set(True)
-    bpy.context.view_layer.objects.active = outer_frame_mesh
+    for obj in wall_objs:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = wall_objs[0]
     bpy.ops.object.join()
     
-    final_walls = bpy.context.active_object
-    final_walls.name = "labirint2_walls_combined"
+    joined_walls = bpy.context.active_object
+    print(f"Joined Walls: {joined_walls.name if joined_walls else 'None'}, vertices count={len(joined_walls.data.vertices) if joined_walls else 0}")
+    joined_walls.name = "labirint2_walls"
     
-    # Weld/Merge double vertices
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.remove_doubles(threshold=0.01)
-    bpy.ops.object.mode_set(mode='OBJECT')
+    # Apply flat shading (no smooth, no bevel as requested: "точь-в-точь, без smooth и bevel")
+    bpy.ops.object.shade_flat()
     
-    # 8. Voxel Remesh to weld junctions cleanly (seamless)
-    print("Voxel remeshing junctions...")
-    remesh_mod = final_walls.modifiers.new(name="Remesh", type='REMESH')
-    remesh_mod.mode = 'VOXEL'
-    remesh_mod.voxel_size = 0.05
-    bpy.ops.object.modifier_apply(modifier=remesh_mod.name)
-    
-    # 9. Gentle Smooth to blend the seams
-    print("Blending seams...")
-    smooth_mod = final_walls.modifiers.new(name="Smooth", type='SMOOTH')
-    smooth_mod.factor = 1.0
-    smooth_mod.iterations = 10  # Gentle smoothing to preserve profile but blend joints!
-    bpy.ops.object.modifier_apply(modifier=smooth_mod.name)
-    
-    # 10. Sharp Frame Slice: Cut the outer frame to restore sharp 90-degree outer corners
-    print("Slicing outer boundary for sharp corners...")
-    slice_size = MAZE_TOTAL_SIZE + OUTER_WALL_THICKNESS * 2
-    bpy.ops.mesh.primitive_cube_add(size=1, location=(0, 0, WALL_HEIGHT / 2))
-    slice_cube = bpy.context.active_object
-    slice_cube.name = "SliceCube"
-    slice_cube.scale = (slice_size, slice_size, WALL_HEIGHT * 2)
-    bpy.ops.object.transform_apply(scale=True)
-    
-    # Apply Boolean Intersect to slice the outer edges flat
-    bool_mod = final_walls.modifiers.new(name="Boolean", type='BOOLEAN')
-    bool_mod.operation = 'INTERSECT'
-    bool_mod.object = slice_cube
-    bpy.context.view_layer.objects.active = final_walls
-    bpy.ops.object.modifier_apply(modifier=bool_mod.name)
-    
-    # Delete temporary slice cube
-    bpy.data.objects.remove(slice_cube, do_unlink=True)
-    
-    # 11. Planar Decimate to optimize flat faces
-    print("Optimizing flat faces...")
-    decimate_mod = final_walls.modifiers.new(name="Decimate", type='DECIMATE')
-    decimate_mod.decimate_type = 'DISSOLVE'
-    decimate_mod.angle_limit = math.radians(2)
-    bpy.ops.object.modifier_apply(modifier=decimate_mod.name)
-    
-    final_walls.name = "labirint2_walls"
-    
-    # Apply default material
+    # Apply WallsMaterial
     mat_walls = bpy.data.materials.new(name="WallsMaterial")
-    final_walls.data.materials.append(mat_walls)
+    joined_walls.data.materials.append(mat_walls)
     
-    # Re-apply floor material slot
+    # 5. Create Floor
+    floor = create_floor()
     mat_floor = bpy.data.materials.new(name="FloorMaterial")
-    floor_obj.data.materials.append(mat_floor)
+    floor.data.materials.append(mat_floor)
     
-    # Select floor and walls for export
-    bpy.ops.object.select_all(action='DESELECT')
-    floor_obj.select_set(True)
-    final_walls.select_set(True)
-    
-    # Export FBX
-    output_path = os.path.join(OUTPUT_DIR, "labirint2.fbx")
-    export_fbx(output_path)
-    
-    print("\n" + "=" * 60)
-    print("NEW LABIRINT2 GENERATED SUCCESSFULLY!")
-    print("=" * 60)
-
-# Helper segment function for outer frame
-def create_wall_segment_from_template(wall_template, x, y, z, length, thickness, height, rotation_z, name):
-    obj = wall_template.copy()
-    obj.data = wall_template.data.copy()
-    obj.name = name
-    bpy.context.scene.collection.objects.link(obj)
-    obj.location = (x, y, z)
-    obj.rotation_euler = (0, 0, rotation_z)
-    obj.scale = (length / 2.2985, thickness / 0.4678, height / 0.9101)
-    bpy.context.view_layer.objects.active = obj
-    obj.select_set(True)
-    bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
-    obj.select_set(False)
-    return obj
-
-def export_fbx(filepath):
+    # 6. Export FBX
     bpy.ops.object.select_all(action='SELECT')
+    # Make sure profile is NOT selected for export
+    profile.select_set(False)
+    
     bpy.ops.export_scene.fbx(
-        filepath=filepath,
+        filepath=OUTPUT_FBX,
         use_selection=True,
         global_scale=1.0,
         apply_unit_scale=True,
@@ -398,7 +392,9 @@ def export_fbx(filepath):
         add_leaf_bones=False,
         bake_anim=False
     )
-    print(f"  Exported: {filepath}")
+    
+    print(f"Exported rounded maze to: {OUTPUT_FBX}")
+    print("=" * 60)
 
 if __name__ == "__main__":
     main()
