@@ -453,7 +453,7 @@ function loadMazeAsset() {
   });
 
   const mazeMaterial = new THREE.MeshPhysicalMaterial({
-    color: 0xe0f7ff, // Subtle liquid glass cyan tint
+    color: 0x716cff, // #716cff (requested color)
     transmission: 0.9,
     opacity: 0.6,
     transparent: true,
@@ -469,7 +469,7 @@ function loadMazeAsset() {
   });
 
   const floorMaterial = new THREE.MeshStandardMaterial({
-    color: 0x0c0f16, // Premium dark slate floor color
+    color: 0xddff68, // #ddff68 (requested color)
     roughness: 0.85, // requested: 0.85
     metalness: 0.1
   });
