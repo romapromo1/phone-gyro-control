@@ -7,7 +7,7 @@ import random
 GRID_SIZE = 10          # 10x10 cell grid
 MAZE_TOTAL_SIZE = 35.6157  # Total maze size in meters (exact user size!)
 CELL_SIZE = MAZE_TOTAL_SIZE / GRID_SIZE  # ~3.56 meters per cell
-WALL_THICKNESS = 0.58       # Slightly thicker base to compensate for smooth shrinkage
+WALL_THICKNESS = 0.4678     # Wall thickness (exact Y thickness of Cube.003)
 WALL_HEIGHT = 0.9101       # Wall height (exact Z height of Cube.003)
 OUTER_WALL_THICKNESS = 0.4678  # Outer border thickness (exact Y thickness of Cube.003)
 
@@ -206,14 +206,14 @@ def apply_remesh_and_smooth(inner_objs, outer_objs, final_name="labirint2"):
     # 2. Voxel Remesh to merge intersecting junctions cleanly and organically
     remesh_mod = joined_inner.modifiers.new(name="Remesh", type='REMESH')
     remesh_mod.mode = 'VOXEL'
-    remesh_mod.voxel_size = 0.05  # High-quality resolution for 35.6m scale!
+    remesh_mod.voxel_size = 0.04  # High-quality resolution for 35.6m scale!
     remesh_mod.adaptivity = 0.0
     bpy.ops.object.modifier_apply(modifier=remesh_mod.name)
     
     # 3. Smooth modifier to round the corners inside
     smooth_mod = joined_inner.modifiers.new(name="Smooth", type='SMOOTH')
     smooth_mod.factor = 1.0
-    smooth_mod.iterations = 35  # Much stronger smoothing for large corner radius
+    smooth_mod.iterations = 80  # Increased to 80 for large-radius soft corners
     bpy.ops.object.modifier_apply(modifier=smooth_mod.name)
     
     # 4. Decimate (Planar) to collapse all coplanar flat faces
