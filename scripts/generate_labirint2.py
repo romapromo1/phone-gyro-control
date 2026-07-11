@@ -119,19 +119,20 @@ def build_maze_model(cells, wall_template, floor_obj, maze_name="labirint2"):
     # Unlink template from selection during creation
     wall_template.select_set(False)
     
-    wall_objs = []
+    outer_objs = []
+    inner_objs = []
     
     offset_x = -MAZE_TOTAL_SIZE / 2
     offset_y = -MAZE_TOTAL_SIZE / 2
     
-    # 1. Create outer walls
+    # 1. Create outer walls (Sharp frame)
     # Top
     w = create_wall_segment_from_template(
         wall_template, 0, MAZE_TOTAL_SIZE / 2 + OUTER_WALL_THICKNESS / 2, WALL_HEIGHT / 2,
         MAZE_TOTAL_SIZE + OUTER_WALL_THICKNESS * 2, OUTER_WALL_THICKNESS, WALL_HEIGHT,
         0, f"{maze_name}_outer_top"
     )
-    wall_objs.append(w)
+    outer_objs.append(w)
     
     # Bottom
     w = create_wall_segment_from_template(
@@ -139,7 +140,7 @@ def build_maze_model(cells, wall_template, floor_obj, maze_name="labirint2"):
         MAZE_TOTAL_SIZE + OUTER_WALL_THICKNESS * 2, OUTER_WALL_THICKNESS, WALL_HEIGHT,
         0, f"{maze_name}_outer_bottom"
     )
-    wall_objs.append(w)
+    outer_objs.append(w)
     
     # Left (rotated 90 degrees)
     w = create_wall_segment_from_template(
@@ -147,7 +148,7 @@ def build_maze_model(cells, wall_template, floor_obj, maze_name="labirint2"):
         MAZE_TOTAL_SIZE, OUTER_WALL_THICKNESS, WALL_HEIGHT,
         math.radians(90), f"{maze_name}_outer_left"
     )
-    wall_objs.append(w)
+    outer_objs.append(w)
     
     # Right (rotated 90 degrees)
     w = create_wall_segment_from_template(
@@ -155,9 +156,9 @@ def build_maze_model(cells, wall_template, floor_obj, maze_name="labirint2"):
         MAZE_TOTAL_SIZE, OUTER_WALL_THICKNESS, WALL_HEIGHT,
         math.radians(90), f"{maze_name}_outer_right"
     )
-    wall_objs.append(w)
+    outer_objs.append(w)
     
-    # 2. Create internal walls
+    # 2. Create internal walls (will be remeshed and smoothed)
     wall_count = 0
     for r in range(rows):
         for c in range(cols):
@@ -171,7 +172,7 @@ def build_maze_model(cells, wall_template, floor_obj, maze_name="labirint2"):
                     CELL_SIZE + WALL_THICKNESS, WALL_THICKNESS, WALL_HEIGHT,
                     0, f"{maze_name}_wall_h_{wall_count}"
                 )
-                wall_objs.append(w)
+                inner_objs.append(w)
                 wall_count += 1
                 
             if cells[r][c]['right'] and c < cols - 1:  # Skip boundary
@@ -180,21 +181,21 @@ def build_maze_model(cells, wall_template, floor_obj, maze_name="labirint2"):
                     CELL_SIZE + WALL_THICKNESS, WALL_THICKNESS, WALL_HEIGHT,
                     math.radians(90), f"{maze_name}_wall_v_{wall_count}"
                 )
-                wall_objs.append(w)
+                inner_objs.append(w)
                 wall_count += 1
                 
-    return wall_objs
+    return inner_objs, outer_objs
 
-def apply_remesh_and_smooth(wall_objs, final_name="labirint2"):
-    # Join walls
+def apply_remesh_and_smooth(inner_objs, outer_objs, final_name="labirint2"):
+    # 1. Join inner walls
     bpy.ops.object.select_all(action='DESELECT')
-    for obj in wall_objs:
+    for obj in inner_objs:
         obj.select_set(True)
-    bpy.context.view_layer.objects.active = wall_objs[0]
+    bpy.context.view_layer.objects.active = inner_objs[0]
     bpy.ops.object.join()
     
-    joined_walls = bpy.context.active_object
-    joined_walls.name = f"{final_name}_walls"
+    joined_inner = bpy.context.active_object
+    joined_inner.name = f"{final_name}_inner_walls"
     
     # Weld/Merge double vertices to clean up overlapping geometry faces
     bpy.ops.object.mode_set(mode='EDIT')
@@ -202,15 +203,44 @@ def apply_remesh_and_smooth(wall_objs, final_name="labirint2"):
     bpy.ops.mesh.remove_doubles(threshold=0.01)
     bpy.ops.object.mode_set(mode='OBJECT')
     
-    # We do NOT apply any Remesh, Smooth or Bevel modifiers here!
-    # This keeps the walls EXACTLY like the original Cube.003 (no extra bevels or smooth subdivisions)
-    # and keeps the polygon/vertex count fully optimized.
+    # 2. Voxel Remesh to merge intersecting junctions cleanly and organically
+    remesh_mod = joined_inner.modifiers.new(name="Remesh", type='REMESH')
+    remesh_mod.mode = 'VOXEL'
+    remesh_mod.voxel_size = 0.05  # High-quality resolution for 35.6m scale!
+    remesh_mod.adaptivity = 0.0
+    bpy.ops.object.modifier_apply(modifier=remesh_mod.name)
+    
+    # 3. Smooth modifier to round the corners inside
+    smooth_mod = joined_inner.modifiers.new(name="Smooth", type='SMOOTH')
+    smooth_mod.factor = 1.0
+    smooth_mod.iterations = 16  # Smooth curving
+    bpy.ops.object.modifier_apply(modifier=smooth_mod.name)
+    
+    # 4. Decimate (Planar) to collapse all coplanar flat faces
+    # This keeps the flat top and side faces optimized with minimal polygons!
+    decimate_mod = joined_inner.modifiers.new(name="Decimate", type='DECIMATE')
+    decimate_mod.decimate_type = 'DISSOLVE'
+    decimate_mod.angle_limit = math.radians(2)
+    bpy.ops.object.modifier_apply(modifier=decimate_mod.name)
+    
+    bpy.ops.object.shade_flat()  # Keep it clean and flat-shaded for exact steps!
+    
+    # 5. Join with outer walls (which remain 100% sharp and un-remeshed)
+    bpy.ops.object.select_all(action='DESELECT')
+    joined_inner.select_set(True)
+    for obj in outer_objs:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = joined_inner
+    bpy.ops.object.join()
+    
+    final_walls = bpy.context.active_object
+    final_walls.name = f"{final_name}_walls"
     
     # Apply default material
     mat_walls = bpy.data.materials.new(name="WallsMaterial")
-    joined_walls.data.materials.append(mat_walls)
+    final_walls.data.materials.append(mat_walls)
     
-    return joined_walls
+    return final_walls
 
 def export_fbx(filepath):
     bpy.ops.object.select_all(action='SELECT')
@@ -252,14 +282,14 @@ def main():
     
     # Build 3D model
     print("Assembling wall pieces...")
-    wall_objs = build_maze_model(cells, wall_template, floor_obj, "labirint2")
+    inner_objs, outer_objs = build_maze_model(cells, wall_template, floor_obj, "labirint2")
     
     # Remove the original template object so it is not in the final scene
     bpy.data.objects.remove(wall_template, do_unlink=True)
     
     # Join and apply organic smooth rounding to walls
     print("Merging and rounding wall joints...")
-    joined_walls = apply_remesh_and_smooth(wall_objs, "labirint2")
+    joined_walls = apply_remesh_and_smooth(inner_objs, outer_objs, "labirint2")
     
     # Re-apply floor material slot
     mat_floor = bpy.data.materials.new(name="FloorMaterial")
