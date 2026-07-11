@@ -43,7 +43,15 @@ class SoundManager {
   private isInitialized = false;
 
   init() {
-    if (this.isInitialized) return;
+    if (this.isInitialized) {
+      // If already initialized but suspended (due to browser autoplay policies), resume it
+      if (this.ctx && this.ctx.state === 'suspended') {
+        this.ctx.resume().then(() => {
+          debugLog('AudioContext resumed successfully via user interaction.');
+        });
+      }
+      return;
+    }
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       this.ctx = new AudioContextClass();
@@ -68,6 +76,11 @@ class SoundManager {
       this.rollOsc.start();
       this.isInitialized = true;
       debugLog('Audio initialized successfully.');
+
+      // Auto-resume if already inside a user gesture callback
+      if (this.ctx.state === 'suspended') {
+        this.ctx.resume();
+      }
     } catch (e) {
       console.warn('Failed to initialize AudioContext:', e);
     }
@@ -152,6 +165,11 @@ class SoundManager {
 }
 
 const sounds = new SoundManager();
+
+// Resume/initialize AudioContext on any user gesture to satisfy browser autoplay policies
+window.addEventListener('click', () => sounds.init());
+window.addEventListener('keydown', () => sounds.init());
+window.addEventListener('touchstart', () => sounds.init());
 
 // Game State variables
 let scene: THREE.Scene;
