@@ -470,8 +470,8 @@ function loadMazeAsset() {
 
   const floorMaterial = new THREE.MeshStandardMaterial({
     color: 0xddff68, // #ddff68 (requested color)
-    roughness: 0.85, // requested: 0.85
-    metalness: 0.1
+    roughness: 0.3,  // updated: 0.3
+    metalness: 0.7   // updated: 0.7
   });
 
   loader.load(mazeFile + '?v=' + v, (fbx) => {
@@ -748,21 +748,6 @@ function spawnGameElements() {
 
   debugLog(`Ball spawned at: x=${startPos.x.toFixed(2)}, y=${startPos.y.toFixed(2)}, z=${startPos.z.toFixed(2)}`);
   debugLog(`Finish spawned at: x=${finishPos.x.toFixed(2)}, y=${finishPos.y.toFixed(2)}, z=${finishPos.z.toFixed(2)}`);
-
-  // Create a horizontal ground plane to receive shadows and serve as fallback matte floor
-  // Size it exactly to the maze boundaries so there is no large grey floor outside the maze
-  const floorGeo = new THREE.PlaneGeometry(mazeSize.x, mazeSize.z);
-  const floorMat = new THREE.MeshStandardMaterial({
-    color: 0x0c0f16, // matching dark matte color
-    roughness: 0.85, // requested: 0.85
-    metalness: 0.1
-  });
-  const floorMesh = new THREE.Mesh(floorGeo, floorMat);
-  floorMesh.name = 'floor-mesh';
-  floorMesh.rotation.x = -Math.PI / 2;
-  floorMesh.position.y = mazeBoundingBox.min.y - 0.02; 
-  floorMesh.receiveShadow = true;
-  mazeContainer.add(floorMesh);
 
   // Set load complete to resume visual rotation updates
   isLevelLoading = false;
