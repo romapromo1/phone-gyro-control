@@ -100,14 +100,9 @@ def create_wall_segment_from_template(wall_template, x, y, z, length, thickness,
     
     return obj
 
-def build_maze_model(cells, wall_template, floor_obj, maze_name="labirint2"):
+def build_maze_model(cells, wall_template, maze_name="labirint2"):
     rows = len(cells)
     cols = len(cells[0])
-    
-    # Position floor exactly at the center (it's already 35.61m x 34.68m)
-    floor_obj.name = f"{maze_name}_floor"
-    floor_obj.location = (0, 0, -0.3668 / 2)
-    floor_obj.scale = (1.0, 1.0, 1.0)
     
     # Unlink template from selection during creation
     wall_template.select_set(False)
@@ -179,30 +174,52 @@ def build_maze_model(cells, wall_template, floor_obj, maze_name="labirint2"):
     return wall_objs
 
 def finalize_walls(wall_objs, final_name="labirint2"):
-    """Join wall segments directly without applying slow, high-poly modifiers like Bevel/Remesh."""
-    bpy.ops.object.select_all(action='DESELECT')
-    for obj in wall_objs:
-        obj.select_set(True)
-    bpy.context.view_layer.objects.active = wall_objs[0]
-    bpy.ops.object.join()
+    """Union the segments and apply Bevel to vertical corners only, leaving the profile untouched."""
+    if not wall_objs:
+        return None
+        
+    main_obj = wall_objs[0]
+    bpy.context.view_layer.objects.active = main_obj
     
-    joined_walls = bpy.context.active_object
-    joined_walls.name = f"{final_name}_walls"
+    print("Performing boolean union on segments...")
+    # Perform boolean union in a loop using FAST solver to merge segments into a clean low-poly mesh
+    for i, obj in enumerate(wall_objs[1:]):
+        bool_mod = main_obj.modifiers.new(name=f"Union_{i}", type='BOOLEAN')
+        bool_mod.operation = 'UNION'
+        bool_mod.object = obj
+        bool_mod.solver = 'FLOAT'
+        
+        bpy.ops.object.modifier_apply(modifier=bool_mod.name)
+        bpy.data.objects.remove(obj, do_unlink=True)
+        
+    # Set final name
+    main_obj.name = f"{final_name}_walls"
     
-    # Optional: weld double vertices at the ends of straight segments to optimize
+    # Weld/Merge vertices at the junctions
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
     bpy.ops.mesh.remove_doubles(threshold=0.01)
     bpy.ops.object.mode_set(mode='OBJECT')
     
-    # Shade smooth to preserve the template's look
+    # Add Bevel Modifier to round the vertical corners
+    print("Adding bevel modifier for vertical corner radii...")
+    bevel_mod = main_obj.modifiers.new(name="BevelCorners", type='BEVEL')
+    bevel_mod.width = 1.0  # 1 meter radius for inner and outer turns
+    bevel_mod.segments = 5
+    bevel_mod.limit_method = 'ANGLE'
+    # 70 degrees ensures it only bevels vertical 90-degree junctions, leaving the wall profile steps intact
+    bevel_mod.angle_limit = math.radians(70)
+    
+    bpy.ops.object.modifier_apply(modifier=bevel_mod.name)
+    
+    # Shade smooth
     bpy.ops.object.shade_smooth()
     
-    # Assign materials (FloorMaterial and WallsMaterial)
+    # Assign material
     mat_walls = bpy.data.materials.new(name="WallsMaterial")
-    joined_walls.data.materials.append(mat_walls)
+    main_obj.data.materials.append(mat_walls)
     
-    return joined_walls
+    return main_obj
 
 def export_fbx(filepath):
     bpy.ops.object.select_all(action='SELECT')
@@ -223,7 +240,7 @@ def export_fbx(filepath):
 
 def main():
     print("\n" + "=" * 60)
-    print("GENERATING OPTIMIZED LABIRINT2 (35.6157 m)")
+    print("GENERATING ROUNDED OPTIMIZED LABIRINT2 (35.6157 m)")
     print("=" * 60)
     
     clear_scene()
@@ -233,24 +250,31 @@ def main():
     bpy.ops.import_scene.fbx(filepath=FORMA_PATH)
     
     wall_template = bpy.data.objects.get("Cube.003")
-    floor_obj = bpy.data.objects.get("floor")
     
-    if not wall_template or not floor_obj:
-        print("Error: Could not find 'Cube.003' or 'floor' in template FBX.")
+    if not wall_template:
+        print("Error: Could not find 'Cube.003' in template FBX.")
         return
         
+    # Generate floor programmatically with exact dimensions from forma.fbx
+    print("Creating floor mesh programmatically...")
+    bpy.ops.mesh.primitive_cube_add(size=1, location=(0, 0, -0.3668 / 2))
+    floor_obj = bpy.context.active_object
+    floor_obj.name = "labirint2_floor"
+    floor_obj.scale = (34.6776, 35.6143, 0.3668)
+    bpy.ops.object.transform_apply(scale=True)
+    
     # Generate maze layout
     cells = generate_maze(GRID_SIZE, GRID_SIZE, seed=2026)
     
     # Build 3D model
     print("Assembling wall pieces...")
-    wall_objs = build_maze_model(cells, wall_template, floor_obj, "labirint2")
+    wall_objs = build_maze_model(cells, wall_template, "labirint2")
     
     # Remove the template object
     bpy.data.objects.remove(wall_template, do_unlink=True)
     
-    # Join walls directly (low poly, optimized)
-    print("Joining wall objects...")
+    # Join walls and bevel vertical corners only (low poly, optimized)
+    print("Joining and beveling walls...")
     joined_walls = finalize_walls(wall_objs, "labirint2")
     
     # Re-apply floor material slot
