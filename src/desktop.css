@@ -462,3 +462,83 @@
   25% { transform: rotate(-10deg); }
   75% { transform: rotate(10deg); }
 }
+
+/* Game statistics HUD elements */
+.game-stats {
+  display: flex;
+  flex-direction: row;
+  gap: 20px;
+  pointer-events: auto;
+}
+
+.stat-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  padding: 6px 20px;
+  border-radius: 12px;
+  backdrop-filter: blur(8px);
+  min-width: 90px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+}
+
+.stat-box .label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+
+.stat-box .value {
+  font-size: 24px;
+  font-weight: 800;
+  font-family: monospace;
+}
+
+.timer-value {
+  color: var(--accent-magenta);
+  text-shadow: var(--glow-shadow-pink);
+}
+
+.saves-value {
+  color: var(--accent-cyan);
+  text-shadow: var(--glow-shadow);
+}
+
+.hud-right {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 16px;
+  pointer-events: auto;
+}
+
+.hud-restart-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1px;
+  padding: 8px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+  text-transform: uppercase;
+}
+
+.hud-restart-btn:hover {
+  background: var(--accent-magenta);
+  color: white;
+  border-color: var(--accent-magenta);
+  box-shadow: var(--glow-shadow-pink);
+  transform: translateY(-1px);
+}
+
+.hud-restart-btn:active {
+  transform: translateY(0);
+}
