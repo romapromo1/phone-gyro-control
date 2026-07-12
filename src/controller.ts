@@ -224,24 +224,17 @@ function updateTelemetry() {
       console.log(`Calibrated! Offsets - Beta: ${offsetBeta.toFixed(1)}, Gamma: ${offsetGamma.toFixed(1)}, Alpha: ${offsetAlpha.toFixed(1)}`);
     }
 
-    let rawRelBeta = sensorBeta - offsetBeta;
-    let rawRelGamma = sensorGamma - offsetGamma;
+    relBeta = sensorBeta - offsetBeta;
+    relGamma = sensorGamma - offsetGamma;
     relAlpha = sensorAlpha - offsetAlpha;
 
     // Handle wrap-arounds
-    if (rawRelBeta > 180) rawRelBeta -= 360;
-    if (rawRelBeta < -180) rawRelBeta += 360;
-    if (rawRelGamma > 90) rawRelGamma -= 180;
-    if (rawRelGamma < -90) rawRelGamma += 180;
+    if (relBeta > 180) relBeta -= 360;
+    if (relBeta < -180) relBeta += 360;
+    if (relGamma > 90) relGamma -= 180;
+    if (relGamma < -90) relGamma += 180;
     if (relAlpha > 180) relAlpha -= 360;
     if (relAlpha < -180) relAlpha += 360;
-
-    // Rotate phone-local relative tilts by -relAlpha to align with screen space calibration
-    const radAlpha = -relAlpha * Math.PI / 180;
-    const cosA = Math.cos(radAlpha);
-    const sinA = Math.sin(radAlpha);
-    relGamma = rawRelGamma * cosA - rawRelBeta * sinA;
-    relBeta = rawRelGamma * sinA + rawRelBeta * cosA;
   }
 
   // 3. Combine sensor input with manual D-pad controls
