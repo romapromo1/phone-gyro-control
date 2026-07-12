@@ -56,21 +56,43 @@ async function startServer() {
     }
   });
 
+  let activeMobileSocketId = null;
+
   // Socket.io logic
   io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
 
     socket.on('register', (type) => {
       console.log(`Socket ${socket.id} registered as ${type}`);
+      socket.data.clientType = type;
+
+      if (type === 'mobile') {
+        const previousMobileSocketId = activeMobileSocketId;
+        activeMobileSocketId = socket.id;
+
+        if (previousMobileSocketId && previousMobileSocketId !== socket.id) {
+          const previousController = io.sockets.sockets.get(previousMobileSocketId);
+          if (previousController) {
+            console.log(`Replacing previous mobile controller: ${previousMobileSocketId}`);
+            previousController.disconnect(true);
+          }
+        }
+        io.to('desktop').emit('controller-status', { connected: true });
+      } else if (type === 'desktop') {
+        socket.emit('controller-status', { connected: Boolean(activeMobileSocketId) });
+      }
+
       socket.join(type);
     });
 
     socket.on('gyro-data', (data) => {
+      if (socket.id !== activeMobileSocketId || socket.data.clientType !== 'mobile') return;
       // Forward gyro telemetry to desktop client(s)
-      io.to('desktop').emit('gyro-update', data);
+      io.to('desktop').volatile.emit('gyro-update', data);
     });
 
     socket.on('calibrate', () => {
+      if (socket.data.clientType === 'mobile' && socket.id !== activeMobileSocketId) return;
       console.log(`Calibration requested by mobile client: ${socket.id}`);
       io.to('desktop').emit('calibrate-request');
     });
@@ -80,6 +102,10 @@ async function startServer() {
     });
 
     socket.on('disconnect', () => {
+      if (socket.id === activeMobileSocketId) {
+        activeMobileSocketId = null;
+        io.to('desktop').emit('controller-status', { connected: false });
+      }
       console.log('Client disconnected:', socket.id);
     });
   });
@@ -93,7 +119,8 @@ async function startServer() {
       mobileUrl = `${tunnelUrl.replace(/\/$/, '')}/controller.html`;
     } else if (isProd || req.headers['x-forwarded-host'] || req.headers.host) {
       const host = req.headers['x-forwarded-host'] || req.headers.host;
-      const proto = req.headers['x-forwarded-proto'] || 'https'; // Render load balancer handles HTTPS
+      const forwardedProto = req.headers['x-forwarded-proto'];
+      const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto || req.protocol;
       mobileUrl = `${proto}://${host}/controller.html`;
     } else {
       mobileUrl = `https://${localIp}:${port}/controller.html`;

@@ -29,6 +29,7 @@ let sensorBeta = 0;
 let sensorGamma = 0;
 let sensorAlpha = 0;
 let hasSensor = false;
+let trackingStarted = false;
 
 // D-pad Active States
 const activeDirections = { up: false, down: false, left: false, right: false };
@@ -63,7 +64,8 @@ btnRequestPermission.addEventListener('click', async () => {
         startOrientationTracking();
       }
     } else {
-      alert('Ошибка: Датчики движения не обнаружены. Пожалуйста, убедитесь, что вы открыли страницу по защищенному протоколу HTTPS (https://...) и разрешили доступ.');
+      alert('Датчики движения не обнаружены. Используйте экранные стрелки для управления.');
+      startOrientationTracking();
     }
   } catch (error) {
     console.error('Error requesting orientation permission:', error);
@@ -132,6 +134,9 @@ document.addEventListener('visibilitychange', async () => {
 });
 
 function startOrientationTracking() {
+  if (trackingStarted) return;
+  trackingStarted = true;
+
   permissionScreen.classList.add('hidden');
   dashboardScreen.classList.remove('hidden');
 
@@ -141,8 +146,9 @@ function startOrientationTracking() {
   // Listen to orientation changes
   window.addEventListener('deviceorientation', handleOrientation);
 
-  // Start steady 60Hz telemetry emitter loop
-  setInterval(updateTelemetry, 16);
+  // 30 Hz remains responsive after desktop smoothing and avoids websocket
+  // backpressure on a busy event Wi-Fi network.
+  setInterval(updateTelemetry, 33);
 }
 
 function handleOrientation(event: DeviceOrientationEvent) {
@@ -241,7 +247,7 @@ function updateTelemetry() {
   levelBubble.style.transform = `translate(${x}px, ${y}px)`;
 
   // Send data to Holobox via Socket.io (normalized between -1.0 and 1.0)
-  socket.emit('gyro-data', {
+  socket.volatile.emit('gyro-data', {
     beta: clampedBeta / maxTilt,   // Pitch (-1.0 to 1.0)
     gamma: clampedGamma / maxTilt, // Roll (-1.0 to 1.0)
     alpha: relAlpha,               // Yaw in degrees (-180 to 180)
@@ -249,13 +255,3 @@ function updateTelemetry() {
     rawRoll: clampedGamma
   });
 }
-
-// Auto-start tracking on page load if permission popup is not required (like on Android Chrome)
-window.addEventListener('DOMContentLoaded', () => {
-  if (typeof DeviceOrientationEvent !== 'undefined') {
-    const deviceOrientationEvent = DeviceOrientationEvent as any;
-    if (typeof deviceOrientationEvent.requestPermission !== 'function') {
-      startOrientationTracking();
-    }
-  }
-});

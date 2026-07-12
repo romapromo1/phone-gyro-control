@@ -30,6 +30,7 @@ const savesSpan = document.getElementById('saves-count') as HTMLElement;
 const btnHudRestart = document.getElementById('btn-hud-restart') as HTMLButtonElement;
 const modalTitle = document.getElementById('modal-title') as HTMLElement;
 const modalSubtitle = document.getElementById('modal-subtitle') as HTMLElement;
+const connectionIndicator = document.querySelector('.connection-indicator') as HTMLElement;
 
 // Maze level management (Level 2 to Level 7 from /new/)
 const MAZE_FILES = [
@@ -40,6 +41,14 @@ const MAZE_FILES = [
   '/source/new/labirint6.fbx',
   '/source/new/labirint7.fbx'
 ];
+const BLENDER_FINISH_COORDS = [
+  { x: -8.809,   y: 1.8372,   z: 0.0 }, // Labyrinth 2 (index 0)
+  { x: 16.063,   y: 1.8372,   z: 0.0 }, // Labyrinth 3 (index 1)
+  { x: -12.483,  y: -12.53,   z: 0.0 }, // Labyrinth 4 (index 2)
+  { x: 8.856,    y: 1.7429,   z: 0.0 }, // Labyrinth 5 (index 3)
+  { x: 1.67227,  y: 1.82146,  z: 0.0 }, // Labyrinth 6 (index 4)
+  { x: -12.53,   y: -12.436,  z: 0.0 }  // Labyrinth 7 (index 5)
+];
 let currentMazeIndex = 0;
 let isAnimating = false; // prevent calling animate() multiple times
 
@@ -48,6 +57,7 @@ let savesCollected = 0;
 const totalSavesGoal = 6;
 let gameTimeLeft = 60.0;
 let isGameActive = false;
+let isControllerConnected = false;
 let gameTimerInterval: any = null;
 
 // Transition and save object state
@@ -56,18 +66,14 @@ let saveMesh: THREE.Group | null = null;
 let startObject: THREE.Object3D | null = null;
 let finishObject: THREE.Object3D | null = null;
 
-let isSaveCollectedAnimation = false;
-let saveCollectionTime = 0.0;
-let saveOrigPos = new THREE.Vector3();
-let saveAnimProgress = 0.0;
-
 let isTransitioning = false;
 let transitionTime = 0.0;
 let transitionDir = 1; // 1: fading out, -1: fading in
 let nextMazeIndexToLoad = -1;
 
-let mazeMaterial: THREE.MeshPhysicalMaterial;
-let floorMaterial: THREE.MeshStandardMaterial;
+let mazeMaterial: THREE.MeshPhysicalMaterial | null = null;
+let floorMaterial: THREE.MeshStandardMaterial | null = null;
+let mazeNormalMap: THREE.Texture | null = null;
 let activeLoadId = 0;
 let scaleFactor = 1.0;
 
@@ -192,12 +198,13 @@ class SoundManager {
       this.ctx.resume();
     }
 
-    const now = this.ctx.currentTime;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
     const notes = [261.63, 329.63, 392.00, 523.25, 659.25]; // C4, E4, G4, C5, E5 arpeggio
 
     notes.forEach((freq, index) => {
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
       
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(freq, now + index * 0.12);
@@ -207,7 +214,7 @@ class SoundManager {
       gain.gain.exponentialRampToValueAtTime(0.001, now + index * 0.12 + 0.3);
       
       osc.connect(gain);
-      gain.connect(this.ctx.destination);
+      gain.connect(ctx.destination);
       
       osc.start(now + index * 0.12);
       osc.stop(now + index * 0.12 + 0.4);
@@ -269,7 +276,6 @@ let isLevelLoading = false; // blocks visual rotation during level loading
 let startPos = new THREE.Vector3();
 let finishPos = new THREE.Vector3();
 let finishRadius = 0.5;
-let hasWon = false;
 let isFirstTelemetry = true;
 let mazeBoundingBox = new THREE.Box3();
 let mazeSize = new THREE.Vector3();
@@ -280,6 +286,58 @@ let aliveTime = 0;
 
 // For collision impact detection
 let lastVelocity = new THREE.Vector3();
+
+const PHYSICS_TIMESTEP = 1 / 60;
+const MAX_PHYSICS_STEPS_PER_FRAME = 4;
+let physicsAccumulator = 0;
+
+function disposeMaterials(object: THREE.Object3D) {
+  const materials = new Set<THREE.Material>();
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh) || !child.material) return;
+    const childMaterials = Array.isArray(child.material) ? child.material : [child.material];
+    childMaterials.forEach(material => materials.add(material));
+  });
+  materials.forEach(material => material.dispose());
+}
+
+function disposeGeometries(object: THREE.Object3D) {
+  const geometries = new Set<THREE.BufferGeometry>();
+  object.traverse((child) => {
+    if (child instanceof THREE.Mesh && child.geometry) {
+      geometries.add(child.geometry);
+    }
+  });
+  geometries.forEach(geometry => geometry.dispose());
+}
+
+function disposeBallMesh() {
+  if (!ballMesh) return;
+  mazeContainer.remove(ballMesh);
+  ballMesh.geometry.dispose();
+  const materials = Array.isArray(ballMesh.material) ? ballMesh.material : [ballMesh.material];
+  materials.forEach(material => material.dispose());
+  ballMesh = null;
+}
+
+function disposeMazeGroup() {
+  if (!mazeGroup) return;
+  mazeContainer.remove(mazeGroup);
+  disposeGeometries(mazeGroup);
+  mazeGroup = null;
+
+  mazeMaterial?.dispose();
+  floorMaterial?.dispose();
+  mazeMaterial = null;
+  floorMaterial = null;
+}
+
+function removeNamedObject(name: string, shouldDisposeMaterials = false) {
+  const object = mazeContainer.getObjectByName(name);
+  if (!object) return;
+  mazeContainer.remove(object);
+  if (shouldDisposeMaterials) disposeMaterials(object);
+}
 
 // Fetch server pairing information
 async function fetchServerInfo() {
@@ -301,6 +359,9 @@ socket.on('connect', () => {
 });
 
 socket.on('gyro-update', (data: { beta: number; gamma: number; alpha?: number }) => {
+  isControllerConnected = true;
+  updateControllerStatus();
+
   if (isFirstTelemetry) {
     pairingOverlay.classList.add('hidden');
     hudOverlay.classList.remove('hidden');
@@ -318,6 +379,19 @@ socket.on('gyro-update', (data: { beta: number; gamma: number; alpha?: number })
     phoneYaw = data.alpha * Math.PI / 180; // convert calibrated yaw from degrees to radians
   }
 });
+
+socket.on('controller-status', ({ connected }: { connected: boolean }) => {
+  isControllerConnected = connected;
+  updateControllerStatus();
+});
+
+function updateControllerStatus() {
+  if (!connectionIndicator) return;
+  connectionIndicator.classList.toggle('disconnected', !isControllerConnected);
+  connectionIndicator.lastChild!.textContent = isControllerConnected
+    ? ' СМАРТФОН АКТИВЕН'
+    : ' СВЯЗЬ ПОТЕРЯНА — ТАЙМЕР НА ПАУЗЕ';
+}
 
 socket.on('calibrate-request', () => {
   debugLog('Calibration request received.');
@@ -375,10 +449,7 @@ function switchMaze(newIndex: number) {
     physicsWorld.removeRigidBody(ballBody);
     ballBody = null;
   }
-  if (ballMesh) {
-    mazeContainer.remove(ballMesh);
-    ballMesh = null;
-  }
+  disposeBallMesh();
 
   // 2. Remove old maze body
   if (mazeBody) {
@@ -387,30 +458,16 @@ function switchMaze(newIndex: number) {
   }
 
   // 3. Remove old visual maze
-  if (mazeGroup) {
-    mazeContainer.remove(mazeGroup);
-    mazeGroup = null;
-  }
+  disposeMazeGroup();
 
   // 4. Remove markers and lights
-  const oldFinish = mazeContainer.getObjectByName('finish-marker');
-  if (oldFinish) mazeContainer.remove(oldFinish);
-
-  const oldFinishLight = mazeContainer.getObjectByName('finish-light');
-  if (oldFinishLight) mazeContainer.remove(oldFinishLight);
-
-  const oldStartLight = mazeContainer.getObjectByName('start-light');
-  if (oldStartLight) mazeContainer.remove(oldStartLight);
-
-  const oldSaveItem = mazeContainer.getObjectByName('save-item');
-  if (oldSaveItem) mazeContainer.remove(oldSaveItem);
-
-  // Remove old floor plane
-  const oldFloor = mazeContainer.getObjectByName('floor-mesh');
-  if (oldFloor) mazeContainer.remove(oldFloor);
+  removeNamedObject('finish-marker');
+  removeNamedObject('finish-light');
+  removeNamedObject('start-light');
+  removeNamedObject('save-item', true);
+  removeNamedObject('floor-mesh', true);
 
   // 5. Reset level state
-  hasWon = false;
   resetCount = 0;
   aliveTime = 0;
   isBallStopping = false;
@@ -428,7 +485,7 @@ function startTimer() {
   if (timerSpan) timerSpan.textContent = String(Math.ceil(gameTimeLeft));
   
   gameTimerInterval = setInterval(() => {
-    if (!isGameActive) return;
+    if (!isGameActive || !isControllerConnected) return;
     
     gameTimeLeft -= 1.0;
     if (gameTimeLeft <= 0.0) {
@@ -489,34 +546,19 @@ function startNewGame() {
     physicsWorld.removeRigidBody(ballBody);
     ballBody = null;
   }
-  if (ballMesh) {
-    mazeContainer.remove(ballMesh);
-    ballMesh = null;
-  }
+  disposeBallMesh();
   if (mazeBody && physicsWorld) {
     physicsWorld.removeRigidBody(mazeBody);
     mazeBody = null;
   }
-  if (mazeGroup) {
-    mazeContainer.remove(mazeGroup);
-    mazeGroup = null;
-  }
+  disposeMazeGroup();
   
   // Remove old markers, lights, save meshes, etc.
-  const oldFinish = mazeContainer.getObjectByName('finish-marker');
-  if (oldFinish) mazeContainer.remove(oldFinish);
-
-  const oldFinishLight = mazeContainer.getObjectByName('finish-light');
-  if (oldFinishLight) mazeContainer.remove(oldFinishLight);
-
-  const oldStartLight = mazeContainer.getObjectByName('start-light');
-  if (oldStartLight) mazeContainer.remove(oldStartLight);
-
-  const oldSaveItem = mazeContainer.getObjectByName('save-item');
-  if (oldSaveItem) mazeContainer.remove(oldSaveItem);
-
-  const oldFloor = mazeContainer.getObjectByName('floor-mesh');
-  if (oldFloor) mazeContainer.remove(oldFloor);
+  removeNamedObject('finish-marker');
+  removeNamedObject('finish-light');
+  removeNamedObject('start-light');
+  removeNamedObject('save-item', true);
+  removeNamedObject('floor-mesh', true);
 
   if (savesSpan) {
     savesSpan.textContent = `0 / ${totalSavesGoal}`;
@@ -527,7 +569,10 @@ function startNewGame() {
   }
   
   // Clear any static saves from the scene
-  activeFlyingSaves.forEach(item => scene.remove(item.mesh));
+  activeFlyingSaves.forEach(item => {
+    scene.remove(item.mesh);
+    disposeMaterials(item.mesh);
+  });
   activeFlyingSaves.length = 0;
   isBallStopping = false;
   ballStopTimer = 0.0;
@@ -614,7 +659,6 @@ function startTransitionToLevel(nextIndex: number) {
 }
 
 function resetGame() {
-  hasWon = false;
   victoryOverlay.classList.add('hidden');
   aliveTime = 0;
   resetCount++;
@@ -670,6 +714,7 @@ async function init() {
   // 1. Initialize Rapier Physics WASM
   await RAPIER.init();
   physicsWorld = new RAPIER.World({ x: 0.0, y: -35.0, z: 0.0 });
+  physicsWorld.timestep = PHYSICS_TIMESTEP;
 
   // 2. Set up Three.js Scene
   scene = new THREE.Scene();
@@ -694,6 +739,12 @@ async function init() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit to 2x for performance in 4K
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  // Shared by every level to avoid repeated downloads and GPU uploads during
+  // a long event session.
+  mazeNormalMap = new THREE.TextureLoader().load('/textures/DefaultMaterial_Normal_OpenGL.png');
+  mazeNormalMap.wrapS = THREE.RepeatWrapping;
+  mazeNormalMap.wrapT = THREE.RepeatWrapping;
 
   // 1. Procedural HDRI Environment Map for reflections only
   const pmremGenerator = new THREE.PMREMGenerator(renderer);
@@ -801,22 +852,9 @@ function loadMazeAsset() {
     mazeContainer.quaternion.set(0, 0, 0, 1);
   }
   const loader = new FBXLoader();
-  const v = Date.now();
   const mazeFile = MAZE_FILES[currentMazeIndex];
 
-  // Load external PBR textures (not embedded in FBX)
-  const textureLoader = new THREE.TextureLoader();
-  const baseColorMap = textureLoader.load('/textures/DefaultMaterial_Base_color.png?v=' + v);
-  const normalMap = textureLoader.load('/textures/DefaultMaterial_Normal_OpenGL.png?v=' + v);
-  const metallicMap = textureLoader.load('/textures/DefaultMaterial_Metallic.png?v=' + v);
-  const roughnessMap = textureLoader.load('/textures/DefaultMaterial_Roughness.png?v=' + v);
-
-  [baseColorMap, normalMap, metallicMap, roughnessMap].forEach(tex => {
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-  });
-
-  mazeMaterial = new THREE.MeshPhysicalMaterial({
+  const loadedMazeMaterial = new THREE.MeshPhysicalMaterial({
     color: 0x716cff, // #716cff (requested color)
     transmission: 0.9,
     opacity: 0.6,
@@ -827,12 +865,12 @@ function loadMazeAsset() {
     thickness: 1.5,
     clearcoat: 1.0,
     clearcoatRoughness: 0.1,
-    normalMap: normalMap,
+    normalMap: mazeNormalMap,
     normalScale: new THREE.Vector2(0.2, 0.2),
     side: THREE.DoubleSide
   });
 
-  floorMaterial = new THREE.MeshStandardMaterial({
+  const loadedFloorMaterial = new THREE.MeshStandardMaterial({
     color: 0xddff68, // #ddff68 (requested color)
     roughness: 0.3,  // requested: 0.3
     metalness: 0.7,  // requested: 0.7
@@ -843,9 +881,17 @@ function loadMazeAsset() {
     opacity: 1.0
   });
 
-  loader.load(mazeFile + '?v=' + v, (fbx) => {
+  mazeMaterial = loadedMazeMaterial;
+  floorMaterial = loadedFloorMaterial;
+
+  // Stable URLs let the browser cache level files between players.
+  loader.load(mazeFile, (fbx) => {
     if (thisLoadId !== activeLoadId) {
       debugLog('Ignoring superseded maze load callback.');
+      disposeGeometries(fbx);
+      disposeMaterials(fbx);
+      loadedMazeMaterial.dispose();
+      loadedFloorMaterial.dispose();
       return;
     }
     mazeGroup = fbx;
@@ -892,7 +938,7 @@ function loadMazeAsset() {
                         nameLower.includes('plane') || 
                         nameLower.includes('cube.001') ||
                         nameLower.includes('floor2');
-        const activeMaterial = isFloor ? floorMaterial : mazeMaterial;
+        const activeMaterial = isFloor ? loadedFloorMaterial : loadedMazeMaterial;
 
         child.material = activeMaterial;
         child.castShadow = true;
@@ -902,11 +948,11 @@ function loadMazeAsset() {
 
     // If we are transitioning, start level fully transparent
     if (isTransitioning) {
-      mazeMaterial.opacity = 0.0;
-      floorMaterial.opacity = 0.0;
+      loadedMazeMaterial.opacity = 0.0;
+      loadedFloorMaterial.opacity = 0.0;
     } else {
-      mazeMaterial.opacity = 0.6;
-      floorMaterial.opacity = 1.0;
+      loadedMazeMaterial.opacity = 0.6;
+      loadedFloorMaterial.opacity = 1.0;
     }
 
     // 1. Get original size of the mesh
@@ -949,8 +995,12 @@ function loadMazeAsset() {
       console.log((xhr.loaded / xhr.total * 100) + '% loaded');
     }
   }, (error) => {
+    loadedMazeMaterial.dispose();
+    loadedFloorMaterial.dispose();
+    if (mazeMaterial === loadedMazeMaterial) mazeMaterial = null;
+    if (floorMaterial === loadedFloorMaterial) floorMaterial = null;
     console.error('An error happened loading the FBX model:', error);
-    debugLog('Error loading FBX model: ' + error.message);
+    debugLog('Error loading FBX model: ' + (error instanceof Error ? error.message : String(error)));
   });
 }
 
@@ -1031,6 +1081,9 @@ function buildPhysicsMaze() {
   // Accumulate all mesh vertices and indices to build Rapier trimesh colliders
   mazeGroup!.traverse((child) => {
     if (child instanceof THREE.Mesh) {
+      const nameLower = child.name.toLowerCase();
+      if (nameLower === 'start' || nameLower === 'finish') return;
+
       const geometry = child.geometry;
       if (!geometry) return;
 
@@ -1065,8 +1118,12 @@ function buildPhysicsMaze() {
       }
 
       try {
-        const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
-        physicsWorld.createCollider(colliderDesc, mazeBody);
+        const colliderDesc = RAPIER.ColliderDesc.trimesh(
+          vertices,
+          indices,
+          RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES
+        ).setFriction(0.35);
+        physicsWorld.createCollider(colliderDesc, mazeBody!);
       } catch (err) {
         console.error('Failed to create collider for child mesh:', err);
       }
@@ -1109,42 +1166,26 @@ function spawnGameElements() {
     );
   }
 
-  // Use Finish node position if found
-  if (finishObject) {
+  // The supplied Blender coordinates are authoritative for all six levels.
+  const finishCoords = BLENDER_FINISH_COORDS[currentMazeIndex];
+  if (finishCoords) {
+    // Map Blender (X, Y, Z) to Three.js (X, Z, -Y). Blender coordinates are
+    // in meters, while FBXLoader exposes these assets in centimeters.
+    const blenderMetersToFbxUnits = 100;
+    finishPos.set(
+      finishCoords.x * blenderMetersToFbxUnits * scaleFactor - mazeCenter.x,
+      finishCoords.z * blenderMetersToFbxUnits * scaleFactor - mazeCenter.y,
+      -finishCoords.y * blenderMetersToFbxUnits * scaleFactor - mazeCenter.z
+    );
+  } else if (finishObject) {
     finishObject.updateMatrixWorld(true);
     finishObject.getWorldPosition(finishPos);
   } else {
-    // Fallback: use the exact Blender coordinates provided by the user
-    // (Note: index 0 corresponds to labirint2, 1 to labirint3, etc.)
-    const BLENDER_FINISH_COORDS = [
-      { x: -8.809,   y: 1.8372,   z: 0.0 }, // Level 2 (index 0)
-      { x: 16.063,   y: 1.8372,   z: 0.0 }, // Level 3 (index 1)
-      { x: -12.483,  y: -12.53,   z: 0.0 }, // Level 4 (index 2)
-      { x: 8.856,    y: 1.7429,   z: 0.0 }, // Level 5 (index 3)
-      { x: 1.67227,  y: 1.82146,  z: 0.0 }, // Level 6 (index 4)
-      { x: -12.53,   y: -12.436,  z: 0.0 }  // Level 7 (index 5)
-    ];
-    
-    const coords = BLENDER_FINISH_COORDS[currentMazeIndex];
-    if (coords) {
-      // Map Blender coordinates (X, Y, Z) to Three.js (X, Z, Y) with sign adjustment for depth axis Y -> -Z
-      // Subtract the unscaled model centering offset (mazeCenter) so the save aligns perfectly with the centered walls!
-      const localX = coords.x;
-      const localY = coords.z;
-      const localZ = -coords.y;
-      
-      finishPos.set(
-        localX * scaleFactor - mazeCenter.x,
-        localY * scaleFactor - mazeCenter.y,
-        localZ * scaleFactor - mazeCenter.z
-      );
-    } else {
-      finishPos.set(
-        mazeBoundingBox.max.x - mazeSize.x * 0.12,
-        mazeBoundingBox.min.y + 0.1,
-        mazeBoundingBox.max.z - mazeSize.z * 0.12
-      );
-    }
+    finishPos.set(
+      mazeBoundingBox.max.x - mazeSize.x * 0.12,
+      mazeBoundingBox.min.y + 0.1,
+      mazeBoundingBox.max.z - mazeSize.z * 0.12
+    );
   }
 
   // 1. Visual representation of the Ball (Glowing holographic sphere)
@@ -1170,10 +1211,11 @@ function spawnGameElements() {
     .setCanSleep(false);
   ballBody = physicsWorld.createRigidBody(ballBodyDesc);
   ballBody.enableCcd(true);
+  physicsAccumulator = 0;
 
   const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius)
     .setRestitution(0.15)
-    .setFriction(0.6);
+    .setFriction(0.35);
   physicsWorld.createCollider(ballColliderDesc, ballBody);
 
   // 3. Visual representation of the Finish Zone: Save item (save.fbx)
@@ -1237,8 +1279,6 @@ function spawnGameElements() {
   debugLog(`Finish spawned at: x=${finishPos.x.toFixed(2)}, y=${finishPos.y.toFixed(2)}, z=${finishPos.z.toFixed(2)}`);
 
   isLevelLoading = false;
-  isSaveCollectedAnimation = false;
-  saveAnimProgress = 0.0;
 }
 
 function onWindowResize() {
@@ -1252,7 +1292,7 @@ function onWindowResize() {
 function animate() {
   requestAnimationFrame(animate);
 
-  const dt = clock.getDelta();
+  const dt = Math.min(clock.getDelta(), PHYSICS_TIMESTEP * MAX_PHYSICS_STEPS_PER_FRAME);
 
   // 1. Static/collected/flying Saves animation
   activeFlyingSaves.forEach((item) => {
@@ -1429,8 +1469,16 @@ function animate() {
       }
     }
 
-    // 4. Step Physics simulation
-    physicsWorld.step();
+    // 4. Fixed-rate physics keeps gameplay speed consistent across a 30 FPS 4K
+    // display and a high-refresh development monitor.
+    physicsAccumulator = Math.min(
+      physicsAccumulator + dt,
+      PHYSICS_TIMESTEP * MAX_PHYSICS_STEPS_PER_FRAME
+    );
+    while (physicsAccumulator >= PHYSICS_TIMESTEP) {
+      physicsWorld.step();
+      physicsAccumulator -= PHYSICS_TIMESTEP;
+    }
 
     // Smooth ball stopping logic
     if (isBallStopping && ballBody) {
@@ -1503,13 +1551,6 @@ function animate() {
 
   // Render Scene
   renderer.render(scene, camera);
-}
-
-function triggerVictory() {
-  hasWon = true;
-  debugLog('VICTORY ACHIEVED!');
-  sounds.playVictory();
-  victoryOverlay.classList.remove('hidden');
 }
 
 // Start pairing fetch and render init
