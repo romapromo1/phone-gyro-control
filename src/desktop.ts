@@ -83,6 +83,7 @@ interface FlyingSave {
   progress: number;
 }
 const activeFlyingSaves: FlyingSave[] = [];
+const mazeCenter = new THREE.Vector3();
 
 // Sound Manager using Web Audio API (Synthesized sounds)
 class SoundManager {
@@ -681,7 +682,7 @@ async function init() {
   scene.add(mazeContainer);
 
   // Camera setup optimized for 9:16 layout
-  camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
   
   renderer = new THREE.WebGLRenderer({
     canvas: document.getElementById('game-canvas') as HTMLCanvasElement,
@@ -727,13 +728,13 @@ async function init() {
   scene.environment = envTarget.texture;
   pmremGenerator.dispose();
 
-  // 2. Add Studio Lights (balanced so floor is well-lit and doesn't get dark or overexposed)
+  // 2. Add Studio Lights (brightened so the entire scene is fully illuminated from all sides)
   // Ambient fill light for base brightness
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
   scene.add(ambientLight);
 
   // Key Light (main light casting shadows)
-  const mainLight = new THREE.DirectionalLight(0xffffff, 1.0);
+  const mainLight = new THREE.DirectionalLight(0xffffff, 1.5);
   mainLight.position.set(20, 50, 10);
   mainLight.castShadow = true;
   mainLight.shadow.mapSize.width = 2048;
@@ -742,12 +743,12 @@ async function init() {
   scene.add(mainLight);
 
   // Fill Light (soft light from the opposite side to brighten shadows)
-  const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+  const fillLight = new THREE.DirectionalLight(0xffffff, 0.8);
   fillLight.position.set(-20, 30, 10);
   scene.add(fillLight);
 
   // Rim Light (backlight highlighting edges of walls and floor)
-  const rimLight = new THREE.DirectionalLight(0xffffff, 0.3);
+  const rimLight = new THREE.DirectionalLight(0xffffff, 0.6);
   rimLight.position.set(0, 30, -20);
   scene.add(rimLight);
 
@@ -757,14 +758,21 @@ async function init() {
     saveTemplate = fbx;
     saveTemplate.traverse((child) => {
       if (child instanceof THREE.Mesh) {
-        child.material = new THREE.MeshStandardMaterial({
-          color: 0xffd700, // Gold
-          metalness: 0.95,
-          roughness: 0.08,
-          emissive: 0x443300
-        });
         child.castShadow = true;
         child.receiveShadow = true;
+        // Keep original materials and PBR textures of save.fbx, just clone to support transitions
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            child.material = child.material.map(m => {
+              const clone = m.clone();
+              clone.transparent = true;
+              return clone;
+            });
+          } else {
+            child.material = child.material.clone();
+            child.material.transparent = true;
+          }
+        }
       }
     });
     debugLog('Loaded save.fbx template successfully.');
@@ -948,13 +956,13 @@ function updateCameraPosition() {
   const angleRad = cameraAngleDeg * Math.PI / 180;
   
   // Keep the distance from camera to center constant
-  const camDistance = distance * 1.5;
+  const camDistance = distance * 1.15;
   const targetZ = camDistance * Math.cos(angleRad);
   const targetY = camDistance * Math.sin(angleRad);
   
   // Initialize camera height if not set
   if (cameraHeight === 0.0) {
-    cameraHeight = distance * 0.40;
+    cameraHeight = distance * 0.32;
   }
   
   // Raise camera Y coordinate and apply sceneYShift for vertical screen position
@@ -980,6 +988,7 @@ function positionCamera() {
   // Get bounds of the scaled maze group (relative to container)
   mazeBoundingBox = getGeometryBoundingBox(mazeGroup!);
   mazeBoundingBox.getCenter(center);
+  mazeCenter.copy(center); // Store global reference for coordinate mapping
 
   // Center the visual maze model group inside the container, but lower it slightly
   mazeYOffset = 0.0;
@@ -998,7 +1007,7 @@ function positionCamera() {
   camera.far = Math.max(1000, distance * 10.0);
   
   // Automatically adjust cameraHeight to match new level geometry size
-  cameraHeight = distance * 0.40;
+  cameraHeight = distance * 0.32;
   
   // Sync HTML inputs with new geometry settings
   updateSlidersUI();
@@ -1114,7 +1123,16 @@ function spawnGameElements() {
     const coords = BLENDER_FINISH_COORDS[currentMazeIndex];
     if (coords) {
       // Map Blender coordinates (X, Y, Z) to Three.js (X, Z, Y) with sign adjustment for depth axis Y -> -Z
-      finishPos.set(coords.x * scaleFactor, coords.z * scaleFactor, -coords.y * scaleFactor);
+      // Subtract the unscaled model centering offset (mazeCenter) so the save aligns perfectly with the centered walls!
+      const localX = coords.x;
+      const localY = coords.z;
+      const localZ = -coords.y;
+      
+      finishPos.set(
+        (localX - mazeCenter.x) * scaleFactor,
+        (localY - mazeCenter.y) * scaleFactor,
+        (localZ - mazeCenter.z) * scaleFactor
+      );
     } else {
       finishPos.set(
         mazeBoundingBox.max.x - mazeSize.x * 0.12,
@@ -1169,7 +1187,7 @@ function spawnGameElements() {
     saveBox.getSize(saveSizeVec);
     const maxDim = Math.max(saveSizeVec.x, saveSizeVec.y, saveSizeVec.z);
     
-    const targetSize = ballRadius * 1.6;
+    const targetSize = ballRadius * 2.4;
     const finalScale = (maxDim > 0.0001) ? (targetSize / maxDim) : targetSize;
     saveMesh.scale.set(finalScale, finalScale, finalScale);
     
@@ -1180,9 +1198,18 @@ function spawnGameElements() {
         child.receiveShadow = true;
         if (child.material) {
           // Clone material to control individual opacity
-          child.material = (child.material as THREE.Material).clone();
-          child.material.transparent = true;
-          child.material.opacity = isTransitioning ? 0.0 : 1.0;
+          if (Array.isArray(child.material)) {
+            child.material = child.material.map(m => {
+              const clone = m.clone();
+              clone.transparent = true;
+              clone.opacity = isTransitioning ? 0.0 : 1.0;
+              return clone;
+            });
+          } else {
+            child.material = child.material.clone();
+            child.material.transparent = true;
+            child.material.opacity = isTransitioning ? 0.0 : 1.0;
+          }
         }
       }
     });
@@ -1270,7 +1297,11 @@ function animate() {
       if (saveMesh) {
         saveMesh.traverse((child) => {
           if (child instanceof THREE.Mesh && child.material) {
-            child.material.opacity = opacity;
+            if (Array.isArray(child.material)) {
+              child.material.forEach(m => m.opacity = opacity);
+            } else {
+              child.material.opacity = opacity;
+            }
           }
         });
       }
@@ -1303,7 +1334,11 @@ function animate() {
       if (saveMesh) {
         saveMesh.traverse((child) => {
           if (child instanceof THREE.Mesh && child.material) {
-            child.material.opacity = opacity;
+            if (Array.isArray(child.material)) {
+              child.material.forEach(m => m.opacity = opacity);
+            } else {
+              child.material.opacity = opacity;
+            }
           }
         });
       }
