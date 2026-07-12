@@ -1058,19 +1058,20 @@ function buildPhysicsMaze() {
     }
   });
 
-  // Create a mathematically perfect smooth solid physical floor collider exactly at floorTopY height to prevent sticking on modular seams
+  // Create a mathematically perfect smooth solid physical floor collider slightly elevated by 0.03m to lift the ball above the bottom faces of the walls
   const floorThickness = 0.2;
+  const physicsFloorY = floorTopY + 0.03;
   const floorColliderDesc = RAPIER.ColliderDesc.cuboid(
     mazeSize.x * 0.5 + 1.0,
     floorThickness * 0.5,
     mazeSize.z * 0.5 + 1.0
   )
-  .setTranslation(0, floorTopY - floorThickness * 0.5, 0)
+  .setTranslation(0, physicsFloorY - floorThickness * 0.5, 0)
   .setFriction(0.4)
   .setRestitution(0.2);
 
   physicsWorld.createCollider(floorColliderDesc, mazeBody);
-  debugLog(`Solid physical floor collider added to maze body at Y = ${floorTopY.toFixed(3)}.`);
+  debugLog(`Solid physical floor collider added to maze body at Y = ${physicsFloorY.toFixed(3)}.`);
 
   debugLog('Physics maze colliders built successfully.');
 }
@@ -1080,17 +1081,17 @@ function spawnGameElements() {
   ballRadius = maxDim * 0.022; 
   finishRadius = ballRadius * 2.0;
 
-  // Spawn ball exactly on the smooth floor in the middle of the corridor at top-left
+  // Spawn ball exactly on the smooth elevated floor in the middle of the corridor at top-left
   startPos.set(
     mazeBoundingBox.min.x + 1.0,
-    floorTopY + ballRadius + 0.05,
+    floorTopY + 0.03 + ballRadius + 0.05,
     mazeBoundingBox.min.z + 1.0
   );
 
   // Position finish Golden Save template at the opposite end of the labyrinth from start (on the smooth floor)
   finishPos.set(
     mazeBoundingBox.max.x - mazeSize.x * 0.12,
-    floorTopY + 0.1,
+    floorTopY + 0.03 + 0.1,
     mazeBoundingBox.max.z - mazeSize.z * 0.12
   );
 
