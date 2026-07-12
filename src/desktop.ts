@@ -1042,7 +1042,10 @@ function buildPhysicsMaze() {
       }
 
       try {
-        const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices)
+        const flags = RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES | 
+                      RAPIER.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES | 
+                      RAPIER.TriMeshFlags.DELETE_DUPLICATE_TRIANGLES;
+        const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices, flags)
           .setFriction(0.1) // Low friction for walls to prevent sticking when sliding along them
           .setRestitution(0.1);
         physicsWorld.createCollider(colliderDesc, mazeBody ?? undefined);
