@@ -1380,7 +1380,7 @@ function animate() {
       physicsWorld.gravity = {
         x: rawGx * cosYaw - rawGz * sinYaw,
         y: -35.0,
-        z: -rawGx * sinYaw - rawGz * cosYaw
+        z: rawGx * sinYaw + rawGz * cosYaw
       };
 
       // 3. Visual maze rotation matching gravity tilt and phone yaw
