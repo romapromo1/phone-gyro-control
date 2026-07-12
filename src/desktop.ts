@@ -40,6 +40,14 @@ const MAZE_FILES = [
   '/source/new/labirint6.fbx',
   '/source/new/labirint7.fbx'
 ];
+const BLENDER_FINISH_COORDS = [
+  { x: -8.809,   y: 1.8372,   z: 0.0 }, // Лабиринт 2 (индекс 0)
+  { x: 16.063,   y: 1.8372,   z: 0.0 }, // Лабиринт 3 (индекс 1)
+  { x: -12.483,  y: -12.53,   z: 0.0 }, // Лабиринт 4 (индекс 2)
+  { x: 8.856,    y: 1.7429,   z: 0.0 }, // Лабиринт 5 (индекс 3)
+  { x: 1.67227,  y: 1.82146,  z: 0.0 }, // Лабиринт 6 (индекс 4)
+  { x: -12.53,   y: -12.436,  z: 0.0 }  // Лабиринт 7 (индекс 5)
+];
 let currentMazeIndex = 0;
 let isAnimating = false; // prevent calling animate() multiple times
 
@@ -53,11 +61,8 @@ let gameTimerInterval: any = null;
 // Transition and save object state
 let saveTemplate: THREE.Group | null = null;
 let saveMesh: THREE.Group | null = null;
-let startObject: THREE.Object3D | null = null;
-let finishObject: THREE.Object3D | null = null;
 
 let isSaveCollectedAnimation = false;
-let saveCollectionTime = 0.0;
 let saveOrigPos = new THREE.Vector3();
 let saveAnimProgress = 0.0;
 
@@ -172,17 +177,18 @@ class SoundManager {
   }
 
   playVictory() {
-    if (!this.isInitialized || !this.ctx) return;
-    if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
+    const ctx = this.ctx;
+    if (!this.isInitialized || !ctx) return;
+    if (ctx.state === 'suspended') {
+      ctx.resume();
     }
 
-    const now = this.ctx.currentTime;
+    const now = ctx.currentTime;
     const notes = [261.63, 329.63, 392.00, 523.25, 659.25]; // C4, E4, G4, C5, E5 arpeggio
 
     notes.forEach((freq, index) => {
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
       
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(freq, now + index * 0.12);
@@ -192,7 +198,7 @@ class SoundManager {
       gain.gain.exponentialRampToValueAtTime(0.001, now + index * 0.12 + 0.3);
       
       osc.connect(gain);
-      gain.connect(this.ctx.destination);
+      gain.connect(ctx.destination);
       
       osc.start(now + index * 0.12);
       osc.stop(now + index * 0.12 + 0.4);
@@ -234,8 +240,6 @@ let targetRoll = 0;  // Roll (from gamma): -1.0 to 1.0
 let currentPitch = 0;
 let currentRoll = 0;
 const maxTiltAngle = 14 * Math.PI / 180; // 14 degrees max visual tilt
-const lerpFactor = 0.09; // smoothing input speed
-
 let phonePitch = 0;
 let phoneRoll = 0;
 let manualPitch = 0;
@@ -254,10 +258,12 @@ let isLevelLoading = false; // blocks visual rotation during level loading
 let startPos = new THREE.Vector3();
 let finishPos = new THREE.Vector3();
 let finishRadius = 0.5;
-let hasWon = false;
 let isFirstTelemetry = true;
 let mazeBoundingBox = new THREE.Box3();
 let mazeSize = new THREE.Vector3();
+let physicsAccumulator = 0.0;
+const PHYSICS_TIMESTEP = 1 / 60; // 60 Hz physics step
+const MAX_PHYSICS_STEPS_PER_FRAME = 3;
 
 // Self-healing reset logic
 let resetCount = 0;
@@ -395,7 +401,6 @@ function switchMaze(newIndex: number) {
   if (oldFloor) mazeContainer.remove(oldFloor);
 
   // 5. Reset level state
-  hasWon = false;
   resetCount = 0;
   aliveTime = 0;
   victoryOverlay.classList.add('hidden');
@@ -575,7 +580,6 @@ function startTransitionToLevel(nextIndex: number) {
 }
 
 function resetGame() {
-  hasWon = false;
   victoryOverlay.classList.add('hidden');
   aliveTime = 0;
   resetCount++;
@@ -694,13 +698,19 @@ async function init() {
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
   scene.add(ambientLight);
 
-  // Key Light (main light casting shadows)
+  // Key Light (main light casting shadows with optimized frustum bounds)
   const mainLight = new THREE.DirectionalLight(0xffffff, 1.0);
   mainLight.position.set(20, 50, 10);
   mainLight.castShadow = true;
   mainLight.shadow.mapSize.width = 2048;
   mainLight.shadow.mapSize.height = 2048;
   mainLight.shadow.bias = -0.0005;
+  mainLight.shadow.camera.left = -10;
+  mainLight.shadow.camera.right = 10;
+  mainLight.shadow.camera.top = 10;
+  mainLight.shadow.camera.bottom = -10;
+  mainLight.shadow.camera.near = 0.5;
+  mainLight.shadow.camera.far = 100;
   scene.add(mainLight);
 
   // Fill Light (soft light from the opposite side to brighten shadows)
@@ -753,17 +763,12 @@ function loadMazeAsset() {
   const v = Date.now();
   const mazeFile = MAZE_FILES[currentMazeIndex];
 
-  // Load external PBR textures (not embedded in FBX)
+  // Load only the normal texture map (avoiding 8MB+ bandwidth waste of unused textures)
   const textureLoader = new THREE.TextureLoader();
-  const baseColorMap = textureLoader.load('/textures/DefaultMaterial_Base_color.png?v=' + v);
-  const normalMap = textureLoader.load('/textures/DefaultMaterial_Normal_OpenGL.png?v=' + v);
-  const metallicMap = textureLoader.load('/textures/DefaultMaterial_Metallic.png?v=' + v);
-  const roughnessMap = textureLoader.load('/textures/DefaultMaterial_Roughness.png?v=' + v);
+  const normalMap = textureLoader.load('/textures/DefaultMaterial_Normal_OpenGL.png');
 
-  [baseColorMap, normalMap, metallicMap, roughnessMap].forEach(tex => {
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-  });
+  normalMap.wrapS = THREE.RepeatWrapping;
+  normalMap.wrapT = THREE.RepeatWrapping;
 
   mazeMaterial = new THREE.MeshPhysicalMaterial({
     color: 0x716cff, // #716cff (requested color)
@@ -802,22 +807,11 @@ function loadMazeAsset() {
 
     debugLog('Loaded labyrinth FBX successfully.');
 
-    startObject = null;
-    finishObject = null;
-
     // Apply PBR material to all meshes (FBX has no embedded textures)
     mazeGroup.traverse((child) => {
       const nameLower = child.name.toLowerCase();
-      if (nameLower === 'start') {
-        startObject = child;
-        child.visible = false;
-        if (child instanceof THREE.Mesh) {
-          child.material = new THREE.MeshBasicMaterial({ visible: false, transparent: true, opacity: 0 });
-        }
-        return;
-      }
-      if (nameLower === 'finish') {
-        finishObject = child;
+      // Hide legacy start/finish placeholders if any remain in legacy files
+      if (nameLower === 'start' || nameLower === 'finish') {
         child.visible = false;
         if (child instanceof THREE.Mesh) {
           child.material = new THREE.MeshBasicMaterial({ visible: false, transparent: true, opacity: 0 });
@@ -899,7 +893,8 @@ function loadMazeAsset() {
     }
   }, (error) => {
     console.error('An error happened loading the FBX model:', error);
-    debugLog('Error loading FBX model: ' + error.message);
+    const msg = error instanceof Error ? error.message : String(error);
+    debugLog('Error loading FBX model: ' + msg);
   });
 }
 
@@ -909,8 +904,12 @@ function updateCameraPosition() {
   const distance = Math.max(mazeSize.x, mazeSize.z);
   const angleRad = cameraAngleDeg * Math.PI / 180;
   
-  // Keep the distance from camera to center constant
-  const camDistance = distance * 1.5;
+  // Adjust distance for vertical screens (aspect < 1.0) so maze fits horizontally
+  let camDistance = distance * 1.5;
+  if (camera.aspect < 1.0) {
+    camDistance = camDistance / camera.aspect;
+  }
+  
   const targetZ = camDistance * Math.cos(angleRad);
   const targetY = camDistance * Math.sin(angleRad);
   
@@ -979,6 +978,10 @@ function buildPhysicsMaze() {
   // Accumulate all mesh vertices and indices to build Rapier trimesh colliders
   mazeGroup!.traverse((child) => {
     if (child instanceof THREE.Mesh) {
+      const nameLower = child.name.toLowerCase();
+      // Skip start and finish markers from generating physical obstacles
+      if (nameLower === 'start' || nameLower === 'finish') return;
+
       const geometry = child.geometry;
       if (!geometry) return;
 
@@ -1014,7 +1017,7 @@ function buildPhysicsMaze() {
 
       try {
         const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
-        physicsWorld.createCollider(colliderDesc, mazeBody);
+        physicsWorld.createCollider(colliderDesc, mazeBody ?? undefined);
       } catch (err) {
         console.error('Failed to create collider for child mesh:', err);
       }
@@ -1042,24 +1045,23 @@ function spawnGameElements() {
   ballRadius = maxDim * 0.022; 
   finishRadius = ballRadius * 2.0;
 
-  // Use Start node position if found
-  if (startObject) {
-    startObject.updateMatrixWorld(true);
-    startObject.getWorldPosition(startPos);
-    startPos.y += ballRadius + 0.3; // slightly above wall top for drop animation
-  } else {
-    // Fallback: spawn at top-left
-    startPos.set(
-      mazeBoundingBox.min.x + mazeSize.x * 0.12,
-      mazeBoundingBox.max.y + ballRadius + 0.3,
-      mazeBoundingBox.min.z + mazeSize.z * 0.12
-    );
-  }
+  // Spawn ball at top-left fallback position (all labyrinths start identically)
+  startPos.set(
+    mazeBoundingBox.min.x + mazeSize.x * 0.12,
+    mazeBoundingBox.max.y + ballRadius + 0.3,
+    mazeBoundingBox.min.z + mazeSize.z * 0.12
+  );
 
-  // Use Finish node position if found
-  if (finishObject) {
-    finishObject.updateMatrixWorld(true);
-    finishObject.getWorldPosition(finishPos);
+  // Position finish Golden Save template using coordinates from Blender
+  const finishCoord = BLENDER_FINISH_COORDS[currentMazeIndex];
+  if (finishCoord && mazeGroup) {
+    // Convert Blender axes (Z-up) to Three.js axes (Y-up):
+    // Blender X -> Three.js X
+    // Blender Z -> Three.js Y (height)
+    // Blender Y -> Three.js Z (depth)
+    finishPos.set(finishCoord.x, finishCoord.z, finishCoord.y);
+    // Apply local-to-world matrix of the centered and scaled maze Group
+    finishPos.applyMatrix4(mazeGroup.matrixWorld);
   } else {
     // Fallback: spawn at bottom-right
     finishPos.set(
@@ -1305,21 +1307,30 @@ function animate() {
       targetPitch = Math.max(-1.0, Math.min(1.0, phonePitch + manualPitch));
       targetRoll = Math.max(-1.0, Math.min(1.0, phoneRoll + manualRoll));
 
-      // 1. Smoothly interpolate maze rotation (taking the shortest path for yaw)
-      currentPitch += (targetPitch - currentPitch) * lerpFactor;
-      currentRoll += (targetRoll - currentRoll) * lerpFactor;
+      // 1. Smoothly interpolate maze rotation (taking the shortest path for yaw, frame-rate independent)
+      const smoothingFactor = 1.0 - Math.exp(-6.0 * dt);
+      currentPitch += (targetPitch - currentPitch) * smoothingFactor;
+      currentRoll += (targetRoll - currentRoll) * smoothingFactor;
       
       let yawDiff = phoneYaw - currentYaw;
       while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
       while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
-      currentYaw += yawDiff * lerpFactor;
+      currentYaw += yawDiff * smoothingFactor;
 
       // 2. Physics world gravity slant in local coordinates
       const gravityStrength = 22.0;
+      
+      // Calculate gravity rotated by the current Yaw (yaw is visual, physics is static)
+      // to ensure phone controls remain intuitive when visual maze is rotated.
+      const cosYaw = Math.cos(currentYaw);
+      const sinYaw = Math.sin(currentYaw);
+      const rawGx = currentRoll * gravityStrength;
+      const rawGz = currentPitch * gravityStrength;
+
       physicsWorld.gravity = {
-        x: currentRoll * gravityStrength,
+        x: rawGx * cosYaw - rawGz * sinYaw,
         y: -35.0,
-        z: currentPitch * gravityStrength
+        z: rawGx * sinYaw + rawGz * cosYaw
       };
 
       // 3. Visual maze rotation matching gravity tilt and phone yaw
@@ -1335,8 +1346,12 @@ function animate() {
       }
     }
 
-    // 4. Step Physics simulation
-    physicsWorld.step();
+    // 4. Step Physics simulation with fixed timestep accumulator
+    physicsAccumulator = Math.min(physicsAccumulator + dt, PHYSICS_TIMESTEP * MAX_PHYSICS_STEPS_PER_FRAME);
+    while (physicsAccumulator >= PHYSICS_TIMESTEP) {
+      physicsWorld.step();
+      physicsAccumulator -= PHYSICS_TIMESTEP;
+    }
 
     // 5. Sync Ball graphics
     const ballPos = ballBody.translation();
@@ -1386,13 +1401,6 @@ function animate() {
 
   // Render Scene
   renderer.render(scene, camera);
-}
-
-function triggerVictory() {
-  hasWon = true;
-  debugLog('VICTORY ACHIEVED!');
-  sounds.playVictory();
-  victoryOverlay.classList.remove('hidden');
 }
 
 // Start pairing fetch and render init

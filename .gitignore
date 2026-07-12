@@ -4,3 +4,10 @@ dist
 .DS_Store
 *.log
 *.blend1
+*.blend
+server.cert
+server.key
+scratch/
+123.svg
+1233.svg
+public/test_fbx.html
