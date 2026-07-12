@@ -412,6 +412,8 @@ function switchMaze(newIndex: number) {
   hasWon = false;
   resetCount = 0;
   aliveTime = 0;
+  isBallStopping = false;
+  ballStopTimer = 0.0;
   victoryOverlay.classList.add('hidden');
 
   // 6. Load new maze
@@ -1084,11 +1086,12 @@ function spawnGameElements() {
     startObject.getWorldPosition(startPos);
     startPos.y += ballRadius + 0.3; // slightly above wall top for drop animation
   } else {
-    // Fallback: spawn at top-left
+    // Fallback: spawn at the center of the top-left cell (0, 0) of the 10x10 maze grid
+    const cellSize = mazeSize.x / 10.0;
     startPos.set(
-      mazeBoundingBox.min.x + mazeSize.x * 0.12,
+      mazeBoundingBox.min.x + cellSize * 0.5,
       mazeBoundingBox.max.y + ballRadius + 0.3,
-      mazeBoundingBox.min.z + mazeSize.z * 0.12
+      mazeBoundingBox.min.z + cellSize * 0.5
     );
   }
 
