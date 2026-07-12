@@ -1178,6 +1178,14 @@ function spawnGameElements() {
   isLevelLoading = false;
   isSaveCollectedAnimation = false;
   saveAnimProgress = 0.0;
+
+  // Expose to window for real-time console debugging
+  (window as any).physicsWorld = physicsWorld;
+  (window as any).ballBody = ballBody;
+  (window as any).ballMesh = ballMesh;
+  (window as any).mazeGroup = mazeGroup;
+  (window as any).startPos = startPos;
+  (window as any).finishPos = finishPos;
 }
 
 function onWindowResize() {
