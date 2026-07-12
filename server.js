@@ -100,7 +100,7 @@ async function startServer() {
 
     socket.on('gyro-data', (data) => {
       if (socket.id !== activeMobileSocketId || socket.data.clientType !== 'mobile') return;
-      console.log(`[Telemetry]: beta=${data.beta?.toFixed(3)}, gamma=${data.gamma?.toFixed(3)}`);
+      // console.log(`[Telemetry]: beta=${data.beta?.toFixed(3)}, gamma=${data.gamma?.toFixed(3)}`);
       // Forward gyro telemetry to desktop client(s)
       io.to('desktop').volatile.emit('gyro-update', data);
     });

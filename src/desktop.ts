@@ -1204,9 +1204,6 @@ function spawnGameElements() {
   // The supplied Blender coordinates are authoritative for all six levels.
   const finishCoords = BLENDER_FINISH_COORDS[currentMazeIndex];
   if (finishCoords) {
-    // Build the point in the FBX coordinate system, then pass it through the
-    // actual maze matrix. This preserves FBX axis conversion, centering and
-    // per-level scale without relying on an approximate manual offset.
     mazeGroup!.updateWorldMatrix(true, true);
     const finishWorld = new THREE.Vector3(
       finishCoords.x * BLENDER_METERS_TO_FBX_UNITS,
