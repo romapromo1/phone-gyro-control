@@ -93,8 +93,12 @@ async function startServer() {
 
     socket.on('calibrate', () => {
       if (socket.data.clientType === 'mobile' && socket.id !== activeMobileSocketId) return;
-      console.log(`Calibration requested by mobile client: ${socket.id}`);
-      io.to('desktop').emit('calibrate-request');
+      console.log(`Calibration requested by ${socket.data.clientType || 'unknown'} client: ${socket.id}`);
+      if (socket.data.clientType === 'desktop') {
+        if (activeMobileSocketId) io.to(activeMobileSocketId).emit('calibrate-request');
+      } else if (socket.data.clientType === 'mobile') {
+        io.to('desktop').emit('calibrate-request');
+      }
     });
 
     socket.on('log', (msg) => {

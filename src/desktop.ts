@@ -49,6 +49,7 @@ const BLENDER_FINISH_COORDS = [
   { x: 1.67227,  y: 1.82146,  z: 0.0 }, // Labyrinth 6 (index 4)
   { x: -12.53,   y: -12.436,  z: 0.0 }  // Labyrinth 7 (index 5)
 ];
+const BLENDER_METERS_TO_FBX_UNITS = 100;
 let currentMazeIndex = 0;
 let isAnimating = false; // prevent calling animate() multiple times
 
@@ -268,8 +269,6 @@ let cameraAngleDeg = 0.0; // starts at 0 degrees horizontal front look (straight
 let mazeYOffset = 0.0;
 let cameraHeight = 0.0; // will be dynamically set based on maze size
 let sceneYShift = 0.0;  // moves the entire scene up/down visually
-let phoneYaw = 0;       // target yaw angle from phone orientation
-let currentYaw = 0;     // current interpolated yaw angle
 let isLevelLoading = false; // blocks visual rotation during level loading
 
 // Game Logic
@@ -358,7 +357,7 @@ socket.on('connect', () => {
   socket.emit('register', 'desktop');
 });
 
-socket.on('gyro-update', (data: { beta: number; gamma: number; alpha?: number }) => {
+socket.on('gyro-update', (data: { beta: number; gamma: number }) => {
   isControllerConnected = true;
   updateControllerStatus();
 
@@ -373,11 +372,8 @@ socket.on('gyro-update', (data: { beta: number; gamma: number; alpha?: number })
   }
 
   // Save raw normalized sensor telemetry (-1.0 to 1.0)
-  phonePitch = data.beta;
-  phoneRoll = data.gamma;
-  if (data.alpha !== undefined) {
-    phoneYaw = data.alpha * Math.PI / 180; // convert calibrated yaw from degrees to radians
-  }
+  phonePitch = Number.isFinite(data.beta) ? THREE.MathUtils.clamp(data.beta, -1, 1) : 0;
+  phoneRoll = Number.isFinite(data.gamma) ? THREE.MathUtils.clamp(data.gamma, -1, 1) : 0;
 });
 
 socket.on('controller-status', ({ connected }: { connected: boolean }) => {
@@ -402,14 +398,12 @@ socket.on('calibrate-request', () => {
 function calibrate() {
   phonePitch = 0;
   phoneRoll = 0;
-  phoneYaw = 0;
   manualPitch = 0;
   manualRoll = 0;
   targetPitch = 0;
   targetRoll = 0;
   currentPitch = 0;
   currentRoll = 0;
-  currentYaw = 0;
   if (mazeContainer) {
     const q = new THREE.Quaternion();
     mazeContainer.quaternion.copy(q);
@@ -1169,13 +1163,20 @@ function spawnGameElements() {
   // The supplied Blender coordinates are authoritative for all six levels.
   const finishCoords = BLENDER_FINISH_COORDS[currentMazeIndex];
   if (finishCoords) {
-    // Map Blender (X, Y, Z) to Three.js (X, Z, -Y). Blender coordinates are
-    // in meters, while FBXLoader exposes these assets in centimeters.
-    const blenderMetersToFbxUnits = 100;
-    finishPos.set(
-      finishCoords.x * blenderMetersToFbxUnits * scaleFactor - mazeCenter.x,
-      finishCoords.z * blenderMetersToFbxUnits * scaleFactor - mazeCenter.y,
-      -finishCoords.y * blenderMetersToFbxUnits * scaleFactor - mazeCenter.z
+    // Build the point in the FBX coordinate system, then pass it through the
+    // actual maze matrix. This preserves FBX axis conversion, centering and
+    // per-level scale without relying on an approximate manual offset.
+    mazeGroup!.updateWorldMatrix(true, true);
+    const finishWorld = new THREE.Vector3(
+      finishCoords.x * BLENDER_METERS_TO_FBX_UNITS,
+      finishCoords.z * BLENDER_METERS_TO_FBX_UNITS,
+      -finishCoords.y * BLENDER_METERS_TO_FBX_UNITS
+    ).applyMatrix4(mazeGroup!.matrixWorld);
+
+    finishPos.copy(mazeContainer.worldToLocal(finishWorld));
+    debugLog(
+      `Finish Blender coords: (${finishCoords.x}, ${finishCoords.y}, ${finishCoords.z}) ` +
+      `-> maze coords: (${finishPos.x.toFixed(3)}, ${finishPos.y.toFixed(3)}, ${finishPos.z.toFixed(3)})`
     );
   } else if (finishObject) {
     finishObject.updateMatrixWorld(true);
@@ -1405,7 +1406,6 @@ function animate() {
       // Keep everything flat and unrotated during level build
       currentPitch = 0;
       currentRoll = 0;
-      currentYaw = 0;
       if (mazeContainer) {
         mazeContainer.quaternion.set(0, 0, 0, 1);
       }
@@ -1439,14 +1439,11 @@ function animate() {
       targetPitch = Math.max(-1.0, Math.min(1.0, phonePitch + manualPitch));
       targetRoll = Math.max(-1.0, Math.min(1.0, phoneRoll + manualRoll));
 
-      // 1. Smoothly interpolate maze rotation (taking the shortest path for yaw)
+      // 1. Smoothly interpolate pitch and roll. Phone compass/yaw is
+      // intentionally ignored: it caused the maze to rotate sideways while
+      // gravity continued using unrotated axes.
       currentPitch += (targetPitch - currentPitch) * lerpFactor;
       currentRoll += (targetRoll - currentRoll) * lerpFactor;
-      
-      let yawDiff = phoneYaw - currentYaw;
-      while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
-      while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
-      currentYaw += yawDiff * lerpFactor;
 
       // 2. Physics world gravity slant in local coordinates
       const gravityStrength = 22.0;
@@ -1456,12 +1453,11 @@ function animate() {
         z: currentPitch * gravityStrength
       };
 
-      // 3. Visual maze rotation matching gravity tilt and phone yaw
+      // 3. Visual maze rotation matching the same pitch/roll axes as gravity.
       const visualPitch = currentPitch * maxTiltAngle;
       const visualRoll = -currentRoll * maxTiltAngle;
-      const visualYaw = currentYaw; 
       const q = new THREE.Quaternion().setFromEuler(
-        new THREE.Euler(visualPitch, visualYaw, visualRoll, 'YXZ')
+        new THREE.Euler(visualPitch, 0, visualRoll, 'XYZ')
       );
       
       if (mazeContainer) {

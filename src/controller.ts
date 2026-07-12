@@ -22,12 +22,10 @@ const btnDpadRight = document.getElementById('btn-dpad-right') as HTMLButtonElem
 // Calibration & Sensor variables
 let offsetBeta = 0;
 let offsetGamma = 0;
-let offsetAlpha = 0;
 let isCalibrated = false;
 
 let sensorBeta = 0;
 let sensorGamma = 0;
-let sensorAlpha = 0;
 let hasSensor = false;
 let trackingStarted = false;
 
@@ -38,8 +36,8 @@ let manualGamma = 0;
 
 // Socket connection initialization
 socket.on('connect', () => {
-  console.log('Connected to server, registering as mobile controller...');
-  socket.emit('register', 'mobile');
+  console.log('Connected to server. Waiting for controller activation...');
+  if (trackingStarted) socket.emit('register', 'mobile');
 });
 
 socket.on('calibrate-request', () => {
@@ -136,6 +134,7 @@ document.addEventListener('visibilitychange', async () => {
 function startOrientationTracking() {
   if (trackingStarted) return;
   trackingStarted = true;
+  socket.emit('register', 'mobile');
 
   permissionScreen.classList.add('hidden');
   dashboardScreen.classList.remove('hidden');
@@ -152,17 +151,29 @@ function startOrientationTracking() {
 }
 
 function handleOrientation(event: DeviceOrientationEvent) {
-  const beta = event.beta;   // Pitch: tilt forward/backward (-180 to 180 deg)
-  const gamma = event.gamma; // Roll: tilt left/right (-90 to 90 deg)
-  const alpha = event.alpha; // Yaw: compass rotation (0 to 360 deg)
+  const beta = event.beta;
+  const gamma = event.gamma;
 
   if (beta === null || gamma === null) return;
 
+  // DeviceOrientation axes rotate together with the screen. Normalize them so
+  // portrait and both landscape orientations control the same maze axes.
+  const orientationAngle = screen.orientation?.angle ?? (window as any).orientation ?? 0;
+  const normalizedAngle = ((orientationAngle % 360) + 360) % 360;
+
   hasSensor = true;
-  sensorBeta = beta;
-  sensorGamma = gamma;
-  if (alpha !== null) {
-    sensorAlpha = alpha;
+  if (normalizedAngle === 90) {
+    sensorBeta = -gamma;
+    sensorGamma = beta;
+  } else if (normalizedAngle === 270) {
+    sensorBeta = gamma;
+    sensorGamma = -beta;
+  } else if (normalizedAngle === 180) {
+    sensorBeta = -beta;
+    sensorGamma = -gamma;
+  } else {
+    sensorBeta = beta;
+    sensorGamma = gamma;
   }
 }
 
@@ -195,28 +206,23 @@ function updateTelemetry() {
   // 2. Compute base relative angles from sensor
   let relBeta = 0;
   let relGamma = 0;
-  let relAlpha = 0;
 
   if (hasSensor) {
     if (!isCalibrated) {
       offsetBeta = sensorBeta;
       offsetGamma = sensorGamma;
-      offsetAlpha = sensorAlpha;
       isCalibrated = true;
-      console.log(`Calibrated! Offsets - Beta: ${offsetBeta.toFixed(1)}, Gamma: ${offsetGamma.toFixed(1)}, Alpha: ${offsetAlpha.toFixed(1)}`);
+      console.log(`Calibrated! Offsets - Beta: ${offsetBeta.toFixed(1)}, Gamma: ${offsetGamma.toFixed(1)}`);
     }
 
     relBeta = sensorBeta - offsetBeta;
     relGamma = sensorGamma - offsetGamma;
-    relAlpha = sensorAlpha - offsetAlpha;
 
     // Handle wrap-arounds
     if (relBeta > 180) relBeta -= 360;
     if (relBeta < -180) relBeta += 360;
     if (relGamma > 90) relGamma -= 180;
     if (relGamma < -90) relGamma += 180;
-    if (relAlpha > 180) relAlpha -= 360;
-    if (relAlpha < -180) relAlpha += 360;
   }
 
   // 3. Combine sensor input with manual D-pad controls
@@ -250,7 +256,6 @@ function updateTelemetry() {
   socket.volatile.emit('gyro-data', {
     beta: clampedBeta / maxTilt,   // Pitch (-1.0 to 1.0)
     gamma: clampedGamma / maxTilt, // Roll (-1.0 to 1.0)
-    alpha: relAlpha,               // Yaw in degrees (-180 to 180)
     rawPitch: clampedBeta,
     rawRoll: clampedGamma
   });
