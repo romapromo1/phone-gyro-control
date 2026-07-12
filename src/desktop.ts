@@ -465,6 +465,41 @@ function endGame(isWin: boolean) {
 function startNewGame() {
   savesCollected = 0;
   currentMazeIndex = 0;
+
+  // Clean up any existing ball, physics, and old level assets first!
+  if (ballBody && physicsWorld) {
+    physicsWorld.removeRigidBody(ballBody);
+    ballBody = null;
+  }
+  if (ballMesh) {
+    mazeContainer.remove(ballMesh);
+    ballMesh = null;
+  }
+  if (mazeBody && physicsWorld) {
+    physicsWorld.removeRigidBody(mazeBody);
+    mazeBody = null;
+  }
+  if (mazeGroup) {
+    mazeContainer.remove(mazeGroup);
+    mazeGroup = null;
+  }
+  
+  // Remove old markers, lights, save meshes, etc.
+  const oldFinish = mazeContainer.getObjectByName('finish-marker');
+  if (oldFinish) mazeContainer.remove(oldFinish);
+
+  const oldFinishLight = mazeContainer.getObjectByName('finish-light');
+  if (oldFinishLight) mazeContainer.remove(oldFinishLight);
+
+  const oldStartLight = mazeContainer.getObjectByName('start-light');
+  if (oldStartLight) mazeContainer.remove(oldStartLight);
+
+  const oldSaveItem = mazeContainer.getObjectByName('save-item');
+  if (oldSaveItem) mazeContainer.remove(oldSaveItem);
+
+  const oldFloor = mazeContainer.getObjectByName('floor-mesh');
+  if (oldFloor) mazeContainer.remove(oldFloor);
+
   if (savesSpan) {
     savesSpan.textContent = `0 / ${totalSavesGoal}`;
   }
@@ -1001,11 +1036,9 @@ function spawnGameElements() {
   finishRadius = ballRadius * 2.0;
 
   // Use Start node position if found
-  if (startObject && mazeGroup) {
-    const localPos = startObject.position.clone();
-    localPos.multiply(mazeGroup.scale);
-    localPos.add(mazeGroup.position);
-    startPos.copy(localPos);
+  if (startObject) {
+    startObject.updateMatrixWorld(true);
+    startObject.getWorldPosition(startPos);
     startPos.y += ballRadius + 0.3; // slightly above wall top for drop animation
   } else {
     // Fallback: spawn at top-left
@@ -1017,11 +1050,9 @@ function spawnGameElements() {
   }
 
   // Use Finish node position if found
-  if (finishObject && mazeGroup) {
-    const localPos = finishObject.position.clone();
-    localPos.multiply(mazeGroup.scale);
-    localPos.add(mazeGroup.position);
-    finishPos.copy(localPos);
+  if (finishObject) {
+    finishObject.updateMatrixWorld(true);
+    finishObject.getWorldPosition(finishPos);
   } else {
     // Fallback: spawn at bottom-right
     finishPos.set(
@@ -1139,10 +1170,10 @@ function animate() {
   // 2. Active Save Mesh Hover/Collection Animations in the level
   if (saveMesh && saveMesh.parent === mazeContainer) {
     if (!isSaveCollectedAnimation) {
-      // Normal rotation: 1 rotation per 0.7s -> 8.98 rad/sec
-      saveMesh.rotation.y += 8.98 * dt;
-      // Bobbing up and down slightly (sine wave over time)
-      const bobOffset = Math.sin(Date.now() * 0.003) * 0.08;
+      // Normal rotation: 1 rotation per 2.1s -> 2.99 rad/sec (reduced 3x)
+      saveMesh.rotation.y += 2.99 * dt;
+      // Bobbing up and down slightly (sine wave over time, reduced 2x to 0.04)
+      const bobOffset = Math.sin(Date.now() * 0.003) * 0.04;
       saveMesh.position.y = finishPos.y + 0.3 + bobOffset;
     } else {
       // Fly-up and scaling animation
@@ -1154,7 +1185,7 @@ function animate() {
       const startY = saveOrigPos.y;
       const targetY = startY + 6.0;
       saveMesh.position.y = THREE.MathUtils.lerp(startY, targetY, saveAnimProgress);
-      saveMesh.rotation.y += 8.98 * (1.0 - saveAnimProgress) * dt;
+      saveMesh.rotation.y += 2.99 * (1.0 - saveAnimProgress) * dt;
     }
   }
 
