@@ -1071,12 +1071,27 @@ function buildPhysicsMaze() {
   // Create STATIC fixed body for stable mesh collisions.
   const mazeBodyDesc = RAPIER.RigidBodyDesc.fixed();
   mazeBody = physicsWorld.createRigidBody(mazeBodyDesc);
+  let floorTop = mazeBoundingBox.min.y;
 
-  // Accumulate all mesh vertices and indices to build Rapier trimesh colliders
+  // Build trimesh colliders for walls only. The exported floor mesh contains
+  // triangulation seams; using it as a collider allowed the ball to sink at a
+  // local seam and become wedged against the wall.
   mazeGroup!.traverse((child) => {
     if (child instanceof THREE.Mesh) {
       const nameLower = child.name.toLowerCase();
       if (nameLower === 'start' || nameLower === 'finish') return;
+
+      const isFloor = nameLower.includes('floor') ||
+                      nameLower.includes('ground') ||
+                      nameLower.includes('plane') ||
+                      nameLower.includes('cube.001') ||
+                      nameLower.includes('floor2');
+      if (isFloor) {
+        child.updateMatrixWorld(true);
+        const floorBox = new THREE.Box3().setFromObject(child, true);
+        floorTop = Math.max(floorTop, floorBox.max.y);
+        return;
+      }
 
       const geometry = child.geometry;
       if (!geometry) return;
@@ -1123,19 +1138,20 @@ function buildPhysicsMaze() {
       }
     }
   });
-  // Create a thick solid physical floor collider at the bottom of the maze to prevent falling through
-  const floorThickness = 0.2;
+  // One continuous collider sits exactly at the visible floor surface. It has
+  // no triangle edges or holes, so the ball cannot partially fall through.
+  const floorThickness = Math.max(0.2, ballRadius * 1.5);
   const floorColliderDesc = RAPIER.ColliderDesc.cuboid(
-    mazeSize.x * 0.5 + 1.0,
+    mazeSize.x * 0.5,
     floorThickness * 0.5,
-    mazeSize.z * 0.5 + 1.0
+    mazeSize.z * 0.5
   )
-  .setTranslation(0, mazeBoundingBox.min.y - floorThickness * 0.5, 0)
-  .setFriction(0.4)
-  .setRestitution(0.2);
+  .setTranslation(0, floorTop - floorThickness * 0.5, 0)
+  .setFriction(0.35)
+  .setRestitution(0.05);
 
   physicsWorld.createCollider(floorColliderDesc, mazeBody);
-  debugLog('Solid physical floor collider added to maze body.');
+  debugLog(`Continuous floor collider added at y=${floorTop.toFixed(3)}.`);
 
   debugLog('Physics maze colliders built successfully.');
 }
