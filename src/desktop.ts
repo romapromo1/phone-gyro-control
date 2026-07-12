@@ -69,6 +69,7 @@ let nextMazeIndexToLoad = -1;
 let mazeMaterial: THREE.MeshPhysicalMaterial;
 let floorMaterial: THREE.MeshStandardMaterial;
 let activeLoadId = 0;
+let scaleFactor = 1.0;
 
 // Sound Manager using Web Audio API (Synthesized sounds)
 class SoundManager {
@@ -865,7 +866,7 @@ function loadMazeAsset() {
     // Scale maze to a realistic size (12.0 meters wide/deep)
     const targetWidth = 12.0;
     const maxDim = Math.max(mazeSize.x, mazeSize.z);
-    const scaleFactor = targetWidth / maxDim;
+    scaleFactor = targetWidth / maxDim;
     
     mazeGroup.scale.set(scaleFactor, scaleFactor, scaleFactor);
     // Force matrix update immediately after scaling to ensure getGeometryBoundingBox computes scaled sizes!
@@ -1061,12 +1062,28 @@ function spawnGameElements() {
     finishObject.updateMatrixWorld(true);
     finishObject.getWorldPosition(finishPos);
   } else {
-    // Fallback: spawn at bottom-right
-    finishPos.set(
-      mazeBoundingBox.max.x - mazeSize.x * 0.12,
-      mazeBoundingBox.min.y + 0.1,
-      mazeBoundingBox.max.z - mazeSize.z * 0.12
-    );
+    // Fallback: use the exact Blender coordinates provided by the user
+    // (Note: index 0 corresponds to labirint2, 1 to labirint3, etc.)
+    const BLENDER_FINISH_COORDS = [
+      { x: -8.809,   y: 1.8372,   z: 0.0 }, // Level 2 (index 0)
+      { x: 16.063,   y: 1.8372,   z: 0.0 }, // Level 3 (index 1)
+      { x: -12.483,  y: -12.53,   z: 0.0 }, // Level 4 (index 2)
+      { x: 8.856,    y: 1.7429,   z: 0.0 }, // Level 5 (index 3)
+      { x: 1.67227,  y: 1.82146,  z: 0.0 }, // Level 6 (index 4)
+      { x: -12.53,   y: -12.436,  z: 0.0 }  // Level 7 (index 5)
+    ];
+    
+    const coords = BLENDER_FINISH_COORDS[currentMazeIndex];
+    if (coords) {
+      // Map Blender coordinates (X, Y, Z) to Three.js (X, Z, Y) with sign adjustment for depth axis Y -> -Z
+      finishPos.set(coords.x * scaleFactor, coords.z * scaleFactor, -coords.y * scaleFactor);
+    } else {
+      finishPos.set(
+        mazeBoundingBox.max.x - mazeSize.x * 0.12,
+        mazeBoundingBox.min.y + 0.1,
+        mazeBoundingBox.max.z - mazeSize.z * 0.12
+      );
+    }
   }
 
   // 1. Visual representation of the Ball (Glowing holographic sphere)
