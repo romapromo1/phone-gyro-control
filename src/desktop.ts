@@ -39,19 +39,19 @@ const modalTitle = document.getElementById('modal-title') as HTMLElement;
 const modalSubtitle = document.getElementById('modal-subtitle') as HTMLElement;
 const connectionIndicator = document.querySelector('.connection-indicator') as HTMLElement;
 
-// Maze level management (Level 2 to Level 7 from /new/)
+// Maze level management (Level 2 to Level 7 from /new/, starting with Labyrinth 4)
 const MAZE_FILES = [
+  '/source/new/labirint4.fbx',
   '/source/new/labirint2.fbx',
   '/source/new/labirint3.fbx',
-  '/source/new/labirint4.fbx',
   '/source/new/labirint5.fbx',
   '/source/new/labirint6.fbx',
   '/source/new/labirint7.fbx'
 ];
 const BLENDER_FINISH_COORDS = [
-  { x: -8.809,   y: 1.8372,   z: 0.0 }, // Labyrinth 2 (index 0)
-  { x: 16.063,   y: 1.8372,   z: 0.0 }, // Labyrinth 3 (index 1)
-  { x: -12.483,  y: -12.53,   z: 0.0 }, // Labyrinth 4 (index 2)
+  { x: -12.483,  y: -12.53,   z: 0.0 }, // Labyrinth 4 (index 0)
+  { x: -8.809,   y: 1.8372,   z: 0.0 }, // Labyrinth 2 (index 1)
+  { x: 16.063,   y: 1.8372,   z: 0.0 }, // Labyrinth 3 (index 2)
   { x: 8.856,    y: 1.7429,   z: 0.0 }, // Labyrinth 5 (index 3)
   { x: 1.67227,  y: 1.82146,  z: 0.0 }, // Labyrinth 6 (index 4)
   { x: -12.53,   y: -12.436,  z: 0.0 }  // Labyrinth 7 (index 5)
@@ -59,6 +59,13 @@ const BLENDER_FINISH_COORDS = [
 const BLENDER_METERS_TO_FBX_UNITS = 100;
 let currentMazeIndex = 0;
 let isAnimating = false; // prevent calling animate() multiple times
+
+function updateLevelUI() {
+  const mazeFile = MAZE_FILES[currentMazeIndex];
+  const match = mazeFile.match(/labirint(\d+)/i);
+  const levelNum = match ? match[1].padStart(2, '0') : String(currentMazeIndex + 1).padStart(2, '0');
+  currentLevelSpan.textContent = levelNum;
+}
 
 // Game mode state variables
 let savesCollected = 0;
@@ -449,7 +456,7 @@ btnNextLevel?.addEventListener('click', () => {
 function switchMaze(newIndex: number) {
   if (newIndex === currentMazeIndex) return;
   currentMazeIndex = newIndex;
-  currentLevelSpan.textContent = String(currentMazeIndex + 2).padStart(2, '0');
+  updateLevelUI();
   debugLog(`Switching to maze ${currentMazeIndex + 1}: ${MAZE_FILES[currentMazeIndex]}`);
 
   // 1. Remove old ball body and mesh
@@ -593,7 +600,7 @@ function startNewGame() {
   });
   savesToRemove.forEach(s => scene.remove(s));
   
-  currentLevelSpan.textContent = String(currentMazeIndex + 2).padStart(2, '0');
+  updateLevelUI();
   loadMazeAsset();
   
   startTimer();
@@ -847,7 +854,7 @@ async function init() {
   });
 
   // Load the Maze asset
-  currentLevelSpan.textContent = String(currentMazeIndex + 2).padStart(2, '0');
+  updateLevelUI();
   loadMazeAsset();
 
   // Window Resize
