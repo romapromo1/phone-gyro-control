@@ -1080,11 +1080,11 @@ function spawnGameElements() {
   ballRadius = maxDim * 0.022; 
   finishRadius = ballRadius * 2.0;
 
-  // Spawn ball at top-left fallback position (all labyrinths start identically)
+  // Spawn ball exactly on the smooth floor in the middle of the corridor at top-left
   startPos.set(
-    mazeBoundingBox.min.x + mazeSize.x * 0.12,
-    mazeBoundingBox.max.y + ballRadius + 0.3,
-    mazeBoundingBox.min.z + mazeSize.z * 0.12
+    mazeBoundingBox.min.x + 1.0,
+    floorTopY + ballRadius + 0.05,
+    mazeBoundingBox.min.z + 1.0
   );
 
   // Position finish Golden Save template at the opposite end of the labyrinth from start (on the smooth floor)
