@@ -1368,32 +1368,25 @@ function animate() {
       currentYaw += yawDiff * smoothingFactor;
 
       // 2. Physics world gravity slant in local coordinates
-      // Since the physics maze is static and does not rotate, the local gravity vector
-      // corresponds directly to the phone-local pitch and roll.
+      // Both the visual tilt and physical gravity rotate together with the maze,
+      // so they are calculated directly in local space.
       const gravityStrength = 22.0;
       physicsWorld.gravity = {
         x: currentRoll * gravityStrength,
         y: -35.0,
-        z: -currentPitch * gravityStrength
+        z: currentPitch * gravityStrength
       };
 
       // 3. Visual maze rotation matching gravity tilt and phone yaw
-      // Calculate world-space screen tilts based on visual yaw rotation.
-      const cosYaw = Math.cos(currentYaw);
-      const sinYaw = Math.sin(currentYaw);
-
-      // Rotate phone-local relative tilts by currentYaw to get visual screen-space tilts
-      const worldRoll = currentRoll * cosYaw + currentPitch * sinYaw;
-      const worldPitch = -currentRoll * sinYaw + currentPitch * cosYaw;
-
-      const visualPitch = worldPitch * maxTiltAngle;
-      const visualRoll = -worldRoll * maxTiltAngle;
+      // Using YXZ Euler order applies Y rotation (yaw) first, which rotates the tilt axis with the maze.
+      const visualPitch = -currentPitch * maxTiltAngle;
+      const visualRoll = -currentRoll * maxTiltAngle;
       const visualYaw = currentYaw; 
+      const q = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(visualPitch, visualYaw, visualRoll, 'YXZ')
+      );
 
       if (mazeContainer) {
-        const qTilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(visualPitch, 0, visualRoll, 'XYZ'));
-        const qYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), visualYaw);
-        const q = new THREE.Quaternion().multiplyQuaternions(qTilt, qYaw);
         mazeContainer.quaternion.copy(q);
       }
     }
