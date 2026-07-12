@@ -68,6 +68,7 @@ let nextMazeIndexToLoad = -1;
 
 let mazeMaterial: THREE.MeshPhysicalMaterial;
 let floorMaterial: THREE.MeshStandardMaterial;
+let activeLoadId = 0;
 
 // Sound Manager using Web Audio API (Synthesized sounds)
 class SoundManager {
@@ -743,6 +744,8 @@ async function init() {
 
 function loadMazeAsset() {
   isLevelLoading = true;
+  activeLoadId++;
+  const thisLoadId = activeLoadId;
   if (mazeContainer) {
     mazeContainer.quaternion.set(0, 0, 0, 1);
   }
@@ -790,6 +793,10 @@ function loadMazeAsset() {
   });
 
   loader.load(mazeFile + '?v=' + v, (fbx) => {
+    if (thisLoadId !== activeLoadId) {
+      debugLog('Ignoring superseded maze load callback.');
+      return;
+    }
     mazeGroup = fbx;
     mazeContainer.add(mazeGroup);
 
