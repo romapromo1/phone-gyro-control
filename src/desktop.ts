@@ -760,19 +760,24 @@ async function init() {
       if (child instanceof THREE.Mesh) {
         child.castShadow = true;
         child.receiveShadow = true;
-        // Keep original materials and PBR textures of save.fbx, just clone to support transitions
-        if (child.material) {
-          if (Array.isArray(child.material)) {
-            child.material = child.material.map(m => {
-              const clone = m.clone();
-              clone.transparent = true;
-              return clone;
-            });
-          } else {
-            child.material = child.material.clone();
-            child.material.transparent = true;
-          }
-        }
+        
+        // Define premium custom materials for the 2 slots (Case and Slider Shutter)
+        // This resolves the missing texture issue in the FBX file.
+        const caseMat = new THREE.MeshStandardMaterial({
+          color: 0x252526, // Dark graphite gray plastic case
+          roughness: 0.4,
+          metalness: 0.15,
+          transparent: true
+        });
+        
+        const sliderMat = new THREE.MeshStandardMaterial({
+          color: 0xcccccc, // Polished silver metal slider
+          roughness: 0.12,
+          metalness: 0.95,
+          transparent: true
+        });
+        
+        child.material = [caseMat, sliderMat];
       }
     });
     debugLog('Loaded save.fbx template successfully.');
@@ -1129,9 +1134,9 @@ function spawnGameElements() {
       const localZ = -coords.y;
       
       finishPos.set(
-        (localX - mazeCenter.x) * scaleFactor,
-        (localY - mazeCenter.y) * scaleFactor,
-        (localZ - mazeCenter.z) * scaleFactor
+        localX * scaleFactor - mazeCenter.x,
+        localY * scaleFactor - mazeCenter.y,
+        localZ * scaleFactor - mazeCenter.z
       );
     } else {
       finishPos.set(
