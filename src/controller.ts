@@ -22,10 +22,12 @@ const btnDpadRight = document.getElementById('btn-dpad-right') as HTMLButtonElem
 // Calibration & Sensor variables
 let offsetBeta = 0;
 let offsetGamma = 0;
+let offsetAlpha = 0;
 let isCalibrated = false;
 
 let sensorBeta = 0;
 let sensorGamma = 0;
+let sensorAlpha = 0;
 let hasSensor = false;
 let trackingStarted = false;
 
@@ -153,6 +155,7 @@ function startOrientationTracking() {
 function handleOrientation(event: DeviceOrientationEvent) {
   const beta = event.beta;
   const gamma = event.gamma;
+  const alpha = event.alpha;
 
   if (beta === null || gamma === null) return;
 
@@ -162,6 +165,10 @@ function handleOrientation(event: DeviceOrientationEvent) {
   const normalizedAngle = ((orientationAngle % 360) + 360) % 360;
 
   hasSensor = true;
+  if (alpha !== null) {
+    sensorAlpha = alpha;
+  }
+
   if (normalizedAngle === 90) {
     sensorBeta = -gamma;
     sensorGamma = beta;
@@ -206,23 +213,28 @@ function updateTelemetry() {
   // 2. Compute base relative angles from sensor
   let relBeta = 0;
   let relGamma = 0;
+  let relAlpha = 0;
 
   if (hasSensor) {
     if (!isCalibrated) {
       offsetBeta = sensorBeta;
       offsetGamma = sensorGamma;
+      offsetAlpha = sensorAlpha;
       isCalibrated = true;
-      console.log(`Calibrated! Offsets - Beta: ${offsetBeta.toFixed(1)}, Gamma: ${offsetGamma.toFixed(1)}`);
+      console.log(`Calibrated! Offsets - Beta: ${offsetBeta.toFixed(1)}, Gamma: ${offsetGamma.toFixed(1)}, Alpha: ${offsetAlpha.toFixed(1)}`);
     }
 
     relBeta = sensorBeta - offsetBeta;
     relGamma = sensorGamma - offsetGamma;
+    relAlpha = sensorAlpha - offsetAlpha;
 
     // Handle wrap-arounds
     if (relBeta > 180) relBeta -= 360;
     if (relBeta < -180) relBeta += 360;
     if (relGamma > 90) relGamma -= 180;
     if (relGamma < -90) relGamma += 180;
+    if (relAlpha > 180) relAlpha -= 360;
+    if (relAlpha < -180) relAlpha += 360;
   }
 
   // 3. Combine sensor input with manual D-pad controls
@@ -256,6 +268,7 @@ function updateTelemetry() {
   socket.volatile.emit('gyro-data', {
     beta: clampedBeta / maxTilt,   // Pitch (-1.0 to 1.0)
     gamma: clampedGamma / maxTilt, // Roll (-1.0 to 1.0)
+    alpha: relAlpha,               // Yaw in degrees (-180 to 180)
     rawPitch: clampedBeta,
     rawRoll: clampedGamma
   });

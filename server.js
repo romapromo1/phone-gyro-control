@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'fs';
 import { createServer as createHttpServer } from 'http';
 import { createServer as createHttpsServer } from 'https';
 import { Server } from 'socket.io';
@@ -8,7 +9,6 @@ import { fileURLToPath } from 'url';
 import os from 'os';
 import qrcode from 'qrcode';
 import selfsigned from 'selfsigned';
-import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,27 +25,39 @@ async function startServer() {
     console.log('Running in PRODUCTION mode (creating standard HTTP server)...');
     httpServer = createHttpServer(app);
   } else {
-    console.log('Running in DEVELOPMENT mode (generating self-signed certificate for HTTPS)...');
-    // Generate self-signed certificate for HTTPS with 2048-bit keys and SAN extension
-    const attrs = [{ name: 'commonName', value: 'localhost' }];
-    const extensions = [
-      {
-        name: 'subjectAltName',
-        altNames: [
-          { type: 2, value: 'localhost' }, // DNS
-          { type: 7, value: '127.0.0.1' }, // IP
-          { type: 7, value: localIp }      // IP
-        ]
-      }
-    ];
-    
-    const pems = await selfsigned.generate(attrs, {
-      days: 365,
-      keySize: 2048,
-      algorithm: 'sha256',
-      extensions
-    });
-    const credentials = { key: pems.private, cert: pems.cert };
+    const certPath = path.join(__dirname, 'server.cert');
+    const keyPath = path.join(__dirname, 'server.key');
+    let credentials;
+
+    if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+      console.log('Running in DEVELOPMENT mode (using cached self-signed certificate)...');
+      credentials = {
+        key: fs.readFileSync(keyPath, 'utf8'),
+        cert: fs.readFileSync(certPath, 'utf8')
+      };
+    } else {
+      console.log('Running in DEVELOPMENT mode (generating new self-signed certificate)...');
+      const attrs = [{ name: 'commonName', value: 'localhost' }];
+      const extensions = [
+        {
+          name: 'subjectAltName',
+          altNames: [
+            { type: 2, value: 'localhost' }, // DNS
+            { type: 7, value: '127.0.0.1' }, // IP
+            { type: 7, value: localIp }      // IP
+          ]
+        }
+      ];
+      const pems = await selfsigned.generate(attrs, {
+        days: 365,
+        keySize: 2048,
+        algorithm: 'sha256',
+        extensions
+      });
+      fs.writeFileSync(keyPath, pems.private, 'utf8');
+      fs.writeFileSync(certPath, pems.cert, 'utf8');
+      credentials = { key: pems.private, cert: pems.cert };
+    }
     httpServer = createHttpsServer(credentials, app);
   }
   
@@ -88,6 +100,7 @@ async function startServer() {
 
     socket.on('gyro-data', (data) => {
       if (socket.id !== activeMobileSocketId || socket.data.clientType !== 'mobile') return;
+      console.log(`[Telemetry]: beta=${data.beta?.toFixed(3)}, gamma=${data.gamma?.toFixed(3)}`);
       // Forward gyro telemetry to desktop client(s)
       io.to('desktop').volatile.emit('gyro-update', data);
     });
@@ -104,13 +117,6 @@ async function startServer() {
 
     socket.on('log', (msg) => {
       console.log(`[Browser]: ${msg}`);
-      if (!isProd) {
-        try {
-          fs.appendFileSync(path.join(__dirname, 'socket_errors.log'), `[${new Date().toISOString()}] [Browser]: ${msg}\n`);
-        } catch (err) {
-          console.error('Failed to write to socket_errors.log:', err);
-        }
-      }
     });
 
     socket.on('disconnect', () => {
