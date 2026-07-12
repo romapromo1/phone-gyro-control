@@ -33,14 +33,13 @@ const modalSubtitle = document.getElementById('modal-subtitle') as HTMLElement;
 
 // Maze level management (Level 2 to Level 7 from /new/)
 const MAZE_FILES = [
-  '/source/new/labirint2.fbx',
-  '/source/new/labirint3.fbx',
-  '/source/new/labirint4.fbx',
-  '/source/new/labirint5.fbx',
-  '/source/new/labirint6.fbx',
-  '/source/new/labirint7.fbx'
+  '/source/fixed/labirint2.fbx',
+  '/source/fixed/labirint3.fbx',
+  '/source/fixed/labirint4.fbx',
+  '/source/fixed/labirint5.fbx',
+  '/source/fixed/labirint6.fbx',
+  '/source/fixed/labirint7.fbx'
 ];
-/*
 const BLENDER_FINISH_COORDS = [
   { x: -8.809,   y: 1.8372,   z: 0.0 }, // Лабиринт 2 (индекс 0)
   { x: 16.063,   y: 1.8372,   z: 0.0 }, // Лабиринт 3 (индекс 1)
@@ -49,7 +48,6 @@ const BLENDER_FINISH_COORDS = [
   { x: 1.67227,  y: 1.82146,  z: 0.0 }, // Лабиринт 6 (индекс 4)
   { x: -12.53,   y: -12.436,  z: 0.0 }  // Лабиринт 7 (индекс 5)
 ];
-*/
 let currentMazeIndex = 0;
 let isAnimating = false; // prevent calling animate() multiple times
 
@@ -1094,12 +1092,27 @@ function spawnGameElements() {
     mazeBoundingBox.min.z + 1.0
   );
 
-  // Position finish Golden Save template at the opposite end of the labyrinth from start (on the smooth floor)
-  finishPos.set(
-    mazeBoundingBox.max.x - mazeSize.x * 0.12,
-    floorTopY + 0.03 + 0.1,
-    mazeBoundingBox.max.z - mazeSize.z * 0.12
-  );
+  // Position finish Golden Save template using coordinates from Blender
+  const finishCoord = BLENDER_FINISH_COORDS[currentMazeIndex];
+  if (finishCoord && mazeGroup) {
+    // Convert Blender axes (Z-up) to Three.js axes (Y-up):
+    // Blender X -> Three.js X
+    // Blender Z -> Three.js Y (height)
+    // Blender Y -> Three.js Z (depth)
+    finishPos.set(finishCoord.x, finishCoord.z, finishCoord.y);
+    // Apply local-to-world matrix of the centered and scaled maze Group
+    finishPos.applyMatrix4(mazeGroup.matrixWorld);
+    
+    // Safety check: ensure finishPos is resting cleanly on the smooth floor
+    finishPos.y = Math.max(finishPos.y, floorTopY + 0.03 + 0.1);
+  } else {
+    // Fallback: Position finish Golden Save template at the opposite end of the labyrinth from start (on the smooth floor)
+    finishPos.set(
+      mazeBoundingBox.max.x - mazeSize.x * 0.12,
+      floorTopY + 0.03 + 0.1,
+      mazeBoundingBox.max.z - mazeSize.z * 0.12
+    );
+  }
 
   // 1. Visual representation of the Ball (Glowing holographic sphere)
   const ballGeo = new THREE.SphereGeometry(ballRadius, 32, 32);
