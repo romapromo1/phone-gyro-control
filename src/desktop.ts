@@ -12,6 +12,13 @@ function debugLog(msg: string) {
   socket.emit('log', msg);
 }
 
+window.addEventListener('error', (event) => {
+  debugLog(`CRITICAL BROWSER ERROR: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`);
+});
+window.addEventListener('unhandledrejection', (event) => {
+  debugLog(`CRITICAL UNHANDLED REJECTION: ${event.reason}`);
+});
+
 // UI Elements
 const pairingOverlay = document.getElementById('pairing-overlay') as HTMLElement;
 const hudOverlay = document.getElementById('hud-overlay') as HTMLElement;
@@ -709,6 +716,7 @@ async function init() {
   await RAPIER.init();
   physicsWorld = new RAPIER.World({ x: 0.0, y: -35.0, z: 0.0 });
   physicsWorld.timestep = PHYSICS_TIMESTEP;
+  physicsWorld.numSolverIterations = 12;
 
   // 2. Set up Three.js Scene
   scene = new THREE.Scene();
@@ -1131,7 +1139,8 @@ function buildPhysicsMaze() {
           vertices,
           indices,
           RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES
-        ).setFriction(0.35);
+        ).setFriction(0.35)
+         .setContactSkin(0.015);
         physicsWorld.createCollider(colliderDesc, mazeBody!);
       } catch (err) {
         console.error('Failed to create collider for child mesh:', err);
@@ -1148,7 +1157,8 @@ function buildPhysicsMaze() {
   )
   .setTranslation(0, floorTop - floorThickness * 0.5, 0)
   .setFriction(0.35)
-  .setRestitution(0.05);
+  .setRestitution(0.05)
+  .setContactSkin(0.005);
 
   physicsWorld.createCollider(floorColliderDesc, mazeBody);
   debugLog(`Continuous floor collider added at y=${floorTop.toFixed(3)}.`);
@@ -1232,7 +1242,8 @@ function spawnGameElements() {
 
   const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius)
     .setRestitution(0.15)
-    .setFriction(0.35);
+    .setFriction(0.35)
+    .setContactSkin(0.005);
   physicsWorld.createCollider(ballColliderDesc, ballBody);
 
   // 3. Visual representation of the Finish Zone: Save item (save.fbx)
@@ -1554,9 +1565,9 @@ function animate() {
       resetGame();
     }
 
-    // 8. Check Win conditions (collect save item)
-    const distToFinish = new THREE.Vector3(ballPos.x, ballPos.y, ballPos.z).distanceTo(finishPos);
-    if (distToFinish < (ballRadius + finishRadius * 0.8) && isGameActive && !isTransitioning) {
+    // 8. Check Win conditions (collect save item) - using 2D distance for robustness
+    const distToFinish2D = Math.hypot(ballPos.x - finishPos.x, ballPos.z - finishPos.z);
+    if (distToFinish2D < (ballRadius + finishRadius * 0.8) && isGameActive && !isTransitioning) {
       collectSave();
     }
   }

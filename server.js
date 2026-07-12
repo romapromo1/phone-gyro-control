@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import os from 'os';
 import qrcode from 'qrcode';
 import selfsigned from 'selfsigned';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -103,6 +104,13 @@ async function startServer() {
 
     socket.on('log', (msg) => {
       console.log(`[Browser]: ${msg}`);
+      if (!isProd) {
+        try {
+          fs.appendFileSync(path.join(__dirname, 'socket_errors.log'), `[${new Date().toISOString()}] [Browser]: ${msg}\n`);
+        } catch (err) {
+          console.error('Failed to write to socket_errors.log:', err);
+        }
+      }
     });
 
     socket.on('disconnect', () => {
