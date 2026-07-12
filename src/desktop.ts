@@ -607,9 +607,9 @@ function resetGame() {
   calibrate();
 }
 
-// Custom function to compute bounding box from THREE.Mesh objects ONLY
-function getGeometryBoundingBox(object: THREE.Object3D): THREE.Box3 {
+function getGeometryBoundingBox(object: THREE.Object3D | null): THREE.Box3 {
   const box = new THREE.Box3();
+  if (!object) return box;
   let hasMesh = false;
   object.traverse((child) => {
     if (child instanceof THREE.Mesh) {
@@ -810,8 +810,9 @@ function loadMazeAsset() {
 
     debugLog('Loaded labyrinth FBX successfully.');
 
-    // Apply PBR material to all meshes (FBX has no embedded textures)
-    mazeGroup.traverse((child) => {
+    if (mazeGroup) {
+      // Apply PBR material to all meshes (FBX has no embedded textures)
+      mazeGroup.traverse((child) => {
       const nameLower = child.name.toLowerCase();
       // Hide legacy start/finish placeholders if any remain in legacy files
       if (nameLower === 'start' || nameLower === 'finish') {
@@ -845,6 +846,7 @@ function loadMazeAsset() {
         child.receiveShadow = true;
       }
     });
+    }
 
     // If we are transitioning, start level fully transparent
     if (isTransitioning) {
@@ -974,13 +976,15 @@ function positionCamera() {
 }
 
 function buildPhysicsMaze() {
+  if (!mazeGroup) return;
+
   // Create STATIC fixed body for stable mesh collisions.
   const mazeBodyDesc = RAPIER.RigidBodyDesc.fixed();
   mazeBody = physicsWorld.createRigidBody(mazeBodyDesc);
 
   // Find visual floor mesh to get its exact top surface height in world coordinates
   floorTopY = mazeBoundingBox.min.y;
-  mazeGroup!.traverse((child) => {
+  mazeGroup.traverse((child) => {
     if (child instanceof THREE.Mesh) {
       const nameLower = child.name.toLowerCase();
       const isFloor = nameLower.includes('floor') || 
@@ -996,7 +1000,7 @@ function buildPhysicsMaze() {
   });
 
   // Accumulate all mesh vertices and indices to build Rapier trimesh colliders
-  mazeGroup!.traverse((child) => {
+  mazeGroup.traverse((child) => {
     if (child instanceof THREE.Mesh) {
       const nameLower = child.name.toLowerCase();
       // Skip start and finish markers from generating physical obstacles
