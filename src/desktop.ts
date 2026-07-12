@@ -1080,9 +1080,8 @@ function buildPhysicsMaze() {
 
 function spawnGameElements() {
   const maxDim = Math.max(mazeSize.x, mazeSize.z);
-  // Reduced ball radius multiplier from 0.022 to 0.012 to prevent the ball 
-  // from getting wedged/pinched in the narrow curved corners of the corridors
-  ballRadius = maxDim * 0.012; 
+  // Doubled ball radius multiplier to 0.024 for the fixed maps
+  ballRadius = maxDim * 0.024; 
   finishRadius = ballRadius * 2.0;
 
   // Spawn ball exactly on the smooth elevated floor in the middle of the corridor at top-left
