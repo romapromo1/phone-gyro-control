@@ -1368,30 +1368,32 @@ function animate() {
       currentYaw += yawDiff * smoothingFactor;
 
       // 2. Physics world gravity slant in local coordinates
+      // Since the physics maze is static and does not rotate, the local gravity vector
+      // corresponds directly to the phone-local pitch and roll.
       const gravityStrength = 22.0;
-      
-      // Calculate gravity rotated by the current Yaw (yaw is visual, physics is static)
-      // to ensure phone controls remain intuitive when visual maze is rotated.
-      const cosYaw = Math.cos(currentYaw);
-      const sinYaw = Math.sin(currentYaw);
-      const rawGx = currentRoll * gravityStrength;
-      const rawGz = currentPitch * gravityStrength;
-
       physicsWorld.gravity = {
-        x: rawGx * cosYaw - rawGz * sinYaw,
+        x: currentRoll * gravityStrength,
         y: -35.0,
-        z: rawGx * sinYaw + rawGz * cosYaw
+        z: -currentPitch * gravityStrength
       };
 
       // 3. Visual maze rotation matching gravity tilt and phone yaw
-      const visualPitch = currentPitch * maxTiltAngle;
-      const visualRoll = -currentRoll * maxTiltAngle;
+      // Calculate world-space screen tilts based on visual yaw rotation.
+      const cosYaw = Math.cos(currentYaw);
+      const sinYaw = Math.sin(currentYaw);
+
+      // Rotate phone-local relative tilts by currentYaw to get visual screen-space tilts
+      const worldRoll = currentRoll * cosYaw + currentPitch * sinYaw;
+      const worldPitch = -currentRoll * sinYaw + currentPitch * cosYaw;
+
+      const visualPitch = worldPitch * maxTiltAngle;
+      const visualRoll = -worldRoll * maxTiltAngle;
       const visualYaw = currentYaw; 
-      const q = new THREE.Quaternion().setFromEuler(
-        new THREE.Euler(visualPitch, visualYaw, visualRoll, 'YXZ')
-      );
-      
+
       if (mazeContainer) {
+        const qTilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(visualPitch, 0, visualRoll, 'XYZ'));
+        const qYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), visualYaw);
+        const q = new THREE.Quaternion().multiplyQuaternions(qTilt, qYaw);
         mazeContainer.quaternion.copy(q);
       }
     }
