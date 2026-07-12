@@ -71,6 +71,19 @@ let floorMaterial: THREE.MeshStandardMaterial;
 let activeLoadId = 0;
 let scaleFactor = 1.0;
 
+let isBallStopping = false;
+let ballStopTimer = 0.0;
+const ballStartLinVel = new THREE.Vector3();
+const ballStartAngVel = new THREE.Vector3();
+
+interface FlyingSave {
+  mesh: THREE.Group;
+  origPos: THREE.Vector3;
+  targetPos: THREE.Vector3;
+  progress: number;
+}
+const activeFlyingSaves: FlyingSave[] = [];
+
 // Sound Manager using Web Audio API (Synthesized sounds)
 class SoundManager {
   private ctx: AudioContext | null = null;
@@ -511,6 +524,11 @@ function startNewGame() {
   }
   
   // Clear any static saves from the scene
+  activeFlyingSaves.forEach(item => scene.remove(item.mesh));
+  activeFlyingSaves.length = 0;
+  isBallStopping = false;
+  ballStopTimer = 0.0;
+
   const savesToRemove: THREE.Object3D[] = [];
   scene.traverse((child) => {
     if (child.name === 'save-item' && child.parent === scene) {
@@ -534,12 +552,18 @@ function collectSave() {
   }
   sounds.playVictory();
   
+  // Smooth deceleration stopping logic
+  if (ballBody) {
+    isBallStopping = true;
+    ballStopTimer = 0.0;
+    const lv = ballBody.linvel();
+    const av = ballBody.angvel();
+    ballStartLinVel.set(lv.x, lv.y, lv.z);
+    ballStartAngVel.set(av.x, av.y, av.z);
+  }
+
   // Trigger save flight animation
   if (saveMesh) {
-    isSaveCollectedAnimation = true;
-    saveOrigPos.copy(saveMesh.position);
-    saveAnimProgress = 0.0;
-    
     // Reparent saveMesh to scene so it stays static
     saveMesh.updateMatrixWorld(true);
     const worldPos = new THREE.Vector3();
@@ -554,7 +578,18 @@ function collectSave() {
     saveMesh.quaternion.copy(worldQuat);
     saveMesh.scale.copy(worldScale);
     
-    saveOrigPos.copy(worldPos);
+    // Calculate target position in the sky aligned under saves counter
+    const targetX = -1.25 + (savesCollected - 1) * 0.5;
+    const targetPos = new THREE.Vector3(targetX, 4.8, -3.5);
+    
+    activeFlyingSaves.push({
+      mesh: saveMesh,
+      origPos: worldPos.clone(),
+      targetPos: targetPos,
+      progress: 0.0
+    });
+    
+    saveMesh = null; // Unreference
   }
   
   // Check if we collected all 6 saves!
@@ -1184,33 +1219,32 @@ function animate() {
 
   const dt = clock.getDelta();
 
-  // 1. Static/collected Saves animation (rotate slowly in the sky)
-  scene.traverse((child) => {
-    if (child.name === 'save-item' && child.parent === scene) {
-      child.rotation.y += (Math.PI * 2 / 3.0) * dt;
+  // 1. Static/collected/flying Saves animation
+  activeFlyingSaves.forEach((item) => {
+    // Continuous rotation: 2.99 rad/s (1 rotation per 2.1s)
+    item.mesh.rotation.y += 2.99 * dt;
+    
+    if (item.progress < 1.0) {
+      item.progress = Math.min(1.0, item.progress + dt * 2.0); // 0.5s duration
+      
+      // Fly up and scaling animation
+      const baseScale = ballRadius * 1.6;
+      // Target scale is 2.5x base scale
+      const currentScale = baseScale * (1.0 + item.progress * 1.5);
+      item.mesh.scale.set(currentScale, currentScale, currentScale);
+      
+      // Interpolate position
+      item.mesh.position.lerpVectors(item.origPos, item.targetPos, item.progress);
     }
   });
 
-  // 2. Active Save Mesh Hover/Collection Animations in the level
+  // 2. Active Save Mesh Hover/Bobbing animation in the level
   if (saveMesh && saveMesh.parent === mazeContainer) {
-    if (!isSaveCollectedAnimation) {
-      // Normal rotation: 1 rotation per 2.1s -> 2.99 rad/sec (reduced 3x)
-      saveMesh.rotation.y += 2.99 * dt;
-      // Bobbing up and down slightly (sine wave over time, reduced 2x to 0.04)
-      const bobOffset = Math.sin(Date.now() * 0.003) * 0.04;
-      saveMesh.position.y = finishPos.y + 0.3 + bobOffset;
-    } else {
-      // Fly-up and scaling animation
-      saveAnimProgress = Math.min(1.0, saveAnimProgress + dt * 2.0); // 0.5s duration
-      const baseScale = ballRadius * 1.6;
-      const currentScale = baseScale * (1.0 + saveAnimProgress * 1.5);
-      saveMesh.scale.set(currentScale, currentScale, currentScale);
-      
-      const startY = saveOrigPos.y;
-      const targetY = startY + 6.0;
-      saveMesh.position.y = THREE.MathUtils.lerp(startY, targetY, saveAnimProgress);
-      saveMesh.rotation.y += 2.99 * (1.0 - saveAnimProgress) * dt;
-    }
+    // Normal rotation: 2.99 rad/sec (1 rotation per 2.1s)
+    saveMesh.rotation.y += 2.99 * dt;
+    // Bobbing up and down slightly (sine wave over time, reduced 2x to 0.04)
+    const bobOffset = Math.sin(Date.now() * 0.003) * 0.04;
+    saveMesh.position.y = finishPos.y + 0.3 + bobOffset;
   }
 
   // 3. Fade Transition Animation for level switching
@@ -1354,6 +1388,29 @@ function animate() {
 
     // 4. Step Physics simulation
     physicsWorld.step();
+
+    // Smooth ball stopping logic
+    if (isBallStopping && ballBody) {
+      ballStopTimer = Math.min(0.1, ballStopTimer + dt);
+      const progress = ballStopTimer / 0.1;
+      const factor = 1.0 - progress;
+      
+      ballBody.setLinvel({
+        x: ballStartLinVel.x * factor,
+        y: ballStartLinVel.y * factor,
+        z: ballStartLinVel.z * factor
+      }, true);
+      
+      ballBody.setAngvel({
+        x: ballStartAngVel.x * factor,
+        y: ballStartAngVel.y * factor,
+        z: ballStartAngVel.z * factor
+      }, true);
+      
+      if (ballStopTimer >= 0.1) {
+        isBallStopping = false;
+      }
+    }
 
     // 5. Sync Ball graphics
     const ballPos = ballBody.translation();
