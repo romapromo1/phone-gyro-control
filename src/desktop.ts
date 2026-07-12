@@ -1173,12 +1173,16 @@ function buildPhysicsMaze() {
   .setContactSkin(0.005);
 
   physicsWorld.createCollider(floorColliderDesc, mazeBody);
-  debugLog(`Continuous floor collider added at y=${(floorTop + 0.03).toFixed(3)}.`);
+debugLog(`Continuous floor collider added at y=${(floorTop + 0.03).toFixed(3)}.`);
 
   debugLog('Physics maze colliders built successfully.');
 }
 
 function spawnGameElements() {
+  // Defensive reset
+  isBallStopping = false;
+  ballStopTimer = 0.0;
+
   const maxDim = Math.max(mazeSize.x, mazeSize.z);
   ballRadius = maxDim * 0.022; 
   finishRadius = ballRadius * 2.0;
@@ -1189,12 +1193,11 @@ function spawnGameElements() {
     startObject.getWorldPosition(startPos);
     startPos.y += ballRadius + 0.3; // slightly above wall top for drop animation
   } else {
-    // Fallback: spawn at the center of the top-left cell (0, 0) of the 10x10 maze grid
-    const cellSize = mazeSize.x / 10.0;
+    // Fallback: spawn exactly in the center of the top-left cell (0.06 offset)
     startPos.set(
-      mazeBoundingBox.min.x + cellSize * 0.5,
-      mazeBoundingBox.max.y + ballRadius + 0.3,
-      mazeBoundingBox.min.z + cellSize * 0.5
+      mazeBoundingBox.min.x + mazeSize.x * 0.06,
+      mazeBoundingBox.max.y + ballRadius + 0.4,
+      mazeBoundingBox.min.z + mazeSize.z * 0.06
     );
   }
 
