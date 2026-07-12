@@ -975,12 +975,38 @@ function buildPhysicsMaze() {
   const mazeBodyDesc = RAPIER.RigidBodyDesc.fixed();
   mazeBody = physicsWorld.createRigidBody(mazeBodyDesc);
 
+  // Find visual floor mesh to get its exact top surface height in world coordinates
+  let floorTopY = mazeBoundingBox.min.y;
+  mazeGroup!.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      const nameLower = child.name.toLowerCase();
+      const isFloor = nameLower.includes('floor') || 
+                      nameLower.includes('ground') || 
+                      nameLower.includes('plane') || 
+                      nameLower.includes('cube.001') ||
+                      nameLower.includes('floor2');
+      if (isFloor) {
+        const floorBox = getGeometryBoundingBox(child);
+        floorTopY = floorBox.max.y;
+      }
+    }
+  });
+
   // Accumulate all mesh vertices and indices to build Rapier trimesh colliders
   mazeGroup!.traverse((child) => {
     if (child instanceof THREE.Mesh) {
       const nameLower = child.name.toLowerCase();
       // Skip start and finish markers from generating physical obstacles
       if (nameLower === 'start' || nameLower === 'finish') return;
+
+      // Skip floor meshes so the ball rolls on the smooth cuboid collider
+      // instead of hitting seams or internal edges between modular floor tiles
+      const isFloor = nameLower.includes('floor') || 
+                      nameLower.includes('ground') || 
+                      nameLower.includes('plane') || 
+                      nameLower.includes('cube.001') ||
+                      nameLower.includes('floor2');
+      if (isFloor) return;
 
       const geometry = child.geometry;
       if (!geometry) return;
@@ -1016,26 +1042,29 @@ function buildPhysicsMaze() {
       }
 
       try {
-        const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
+        const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices)
+          .setFriction(0.1) // Low friction for walls to prevent sticking when sliding along them
+          .setRestitution(0.1);
         physicsWorld.createCollider(colliderDesc, mazeBody ?? undefined);
       } catch (err) {
         console.error('Failed to create collider for child mesh:', err);
       }
     }
   });
-  // Create a thick solid physical floor collider at the bottom of the maze to prevent falling through
+
+  // Create a mathematically perfect smooth solid physical floor collider exactly at floorTopY height to prevent sticking on modular seams
   const floorThickness = 0.2;
   const floorColliderDesc = RAPIER.ColliderDesc.cuboid(
     mazeSize.x * 0.5 + 1.0,
     floorThickness * 0.5,
     mazeSize.z * 0.5 + 1.0
   )
-  .setTranslation(0, mazeBoundingBox.min.y - floorThickness * 0.5, 0)
+  .setTranslation(0, floorTopY - floorThickness * 0.5, 0)
   .setFriction(0.4)
   .setRestitution(0.2);
 
   physicsWorld.createCollider(floorColliderDesc, mazeBody);
-  debugLog('Solid physical floor collider added to maze body.');
+  debugLog(`Solid physical floor collider added to maze body at Y = ${floorTopY.toFixed(3)}.`);
 
   debugLog('Physics maze colliders built successfully.');
 }
