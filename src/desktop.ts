@@ -1070,9 +1070,15 @@ function spawnGameElements() {
     saveMesh.name = 'save-item';
     saveMesh.position.copy(finishPos);
     
-    // Scale template relative to ball
-    const saveScale = ballRadius * 1.6;
-    saveMesh.scale.set(saveScale, saveScale, saveScale);
+    // Calculate raw size of saveMesh to scale dynamically to target size (ballRadius * 1.6)
+    const saveBox = getGeometryBoundingBox(saveMesh);
+    const saveSizeVec = new THREE.Vector3();
+    saveBox.getSize(saveSizeVec);
+    const maxDim = Math.max(saveSizeVec.x, saveSizeVec.y, saveSizeVec.z);
+    
+    const targetSize = ballRadius * 1.6;
+    const finalScale = (maxDim > 0.0001) ? (targetSize / maxDim) : targetSize;
+    saveMesh.scale.set(finalScale, finalScale, finalScale);
     
     saveMesh.traverse((child) => {
       if (child instanceof THREE.Mesh) {
