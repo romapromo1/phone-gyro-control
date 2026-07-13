@@ -1142,11 +1142,6 @@ function spawnGameElements() {
     .setFriction(0.6);
   physicsWorld.createCollider(ballColliderDesc, ballBody);
 
-  // 3. Visual representation of the Finish Zone: Save item (save.fbx)
-  if (saveMesh) {
-    mazeContainer.remove(saveMesh);
-    saveMesh = null;
-  }
   if (saveTemplate) {
     saveMesh = saveTemplate.clone();
     saveMesh.name = 'save-item';
@@ -1161,6 +1156,9 @@ function spawnGameElements() {
     const targetSize = ballRadius * 1.6;
     const finalScale = (maxDim > 0.0001) ? (targetSize / maxDim) : targetSize;
     saveMesh.scale.set(finalScale, finalScale, finalScale);
+    
+    // Lift the save disk slightly so it rests on top of the platform/floor rather than clipping into it
+    saveMesh.position.y += targetSize * 0.6;
     
     saveMesh.traverse((child) => {
       if (child instanceof THREE.Mesh) {
@@ -1193,11 +1191,23 @@ function spawnGameElements() {
   finishLight.name = 'finish-light';
   mazeContainer.add(finishLight); 
 
-  // Dedicated bright white light directly above save.fbx to make it highly visible and bright
-  const saveHighlightLight = new THREE.PointLight(0xffffff, 8, ballRadius * 15);
-  saveHighlightLight.position.set(finishPos.x, finishPos.y + 0.6, finishPos.z);
-  saveHighlightLight.name = 'save-highlight-light';
-  mazeContainer.add(saveHighlightLight);
+  // Front highlight light directly facing the save disk's front emblem
+  const saveHighlightFront = new THREE.PointLight(0xffffff, 15, ballRadius * 25);
+  saveHighlightFront.position.set(finishPos.x, finishPos.y + 0.3, finishPos.z + 1.2);
+  saveHighlightFront.name = 'save-highlight-front';
+  mazeContainer.add(saveHighlightFront);
+
+  // Back highlight light to eliminate shadows on the reverse side
+  const saveHighlightBack = new THREE.PointLight(0xffffff, 8, ballRadius * 20);
+  saveHighlightBack.position.set(finishPos.x, finishPos.y + 0.3, finishPos.z - 1.2);
+  saveHighlightBack.name = 'save-highlight-back';
+  mazeContainer.add(saveHighlightBack);
+
+  // Top highlight light shining down from above
+  const saveHighlightTop = new THREE.PointLight(0xffffff, 8, ballRadius * 20);
+  saveHighlightTop.position.set(finishPos.x, finishPos.y + 1.0, finishPos.z);
+  saveHighlightTop.name = 'save-highlight-top';
+  mazeContainer.add(saveHighlightTop);
 
   // Ambient neon light at start
   const startLight = new THREE.PointLight(0x00f0ff, 2, ballRadius * 8);
@@ -1297,8 +1307,12 @@ function animate() {
       if (finishLight) finishLight.intensity = 4.0 * opacity;
       const startLight = mazeContainer.getObjectByName('start-light') as THREE.PointLight;
       if (startLight) startLight.intensity = 2.0 * opacity;
-      const saveHighlight = mazeContainer.getObjectByName('save-highlight-light') as THREE.PointLight;
-      if (saveHighlight) saveHighlight.intensity = 8.0 * opacity;
+      const saveFront = mazeContainer.getObjectByName('save-highlight-front') as THREE.PointLight;
+      if (saveFront) saveFront.intensity = 15.0 * opacity;
+      const saveBack = mazeContainer.getObjectByName('save-highlight-back') as THREE.PointLight;
+      if (saveBack) saveBack.intensity = 8.0 * opacity;
+      const saveTop = mazeContainer.getObjectByName('save-highlight-top') as THREE.PointLight;
+      if (saveTop) saveTop.intensity = 8.0 * opacity;
       
       if (transitionTime >= 0.3) {
         // Fade out complete, switch level
@@ -1336,8 +1350,12 @@ function animate() {
       if (finishLight) finishLight.intensity = 4.0 * opacity;
       const startLight = mazeContainer.getObjectByName('start-light') as THREE.PointLight;
       if (startLight) startLight.intensity = 2.0 * opacity;
-      const saveHighlight = mazeContainer.getObjectByName('save-highlight-light') as THREE.PointLight;
-      if (saveHighlight) saveHighlight.intensity = 8.0 * opacity;
+      const saveFront = mazeContainer.getObjectByName('save-highlight-front') as THREE.PointLight;
+      if (saveFront) saveFront.intensity = 15.0 * opacity;
+      const saveBack = mazeContainer.getObjectByName('save-highlight-back') as THREE.PointLight;
+      if (saveBack) saveBack.intensity = 8.0 * opacity;
+      const saveTop = mazeContainer.getObjectByName('save-highlight-top') as THREE.PointLight;
+      if (saveTop) saveTop.intensity = 8.0 * opacity;
       
       if (transitionTime <= 0.0) {
         isTransitioning = false;
