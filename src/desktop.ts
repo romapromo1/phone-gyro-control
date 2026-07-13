@@ -1163,10 +1163,19 @@ function spawnGameElements() {
         child.castShadow = true;
         child.receiveShadow = true;
         if (child.material) {
-          // Clone material to control individual opacity
-          child.material = (child.material as THREE.Material).clone();
-          child.material.transparent = true;
-          child.material.opacity = isTransitioning ? 0.0 : 1.0;
+          // Clone material(s) to control individual opacity, supporting both single and multi-materials
+          if (Array.isArray(child.material)) {
+            child.material = child.material.map((mat) => {
+              const cloned = mat.clone();
+              cloned.transparent = true;
+              cloned.opacity = isTransitioning ? 0.0 : 1.0;
+              return cloned;
+            });
+          } else {
+            child.material = child.material.clone();
+            child.material.transparent = true;
+            child.material.opacity = isTransitioning ? 0.0 : 1.0;
+          }
         }
       }
     });
@@ -1263,7 +1272,11 @@ function animate() {
       if (saveMesh) {
         saveMesh.traverse((child) => {
           if (child instanceof THREE.Mesh && child.material) {
-            child.material.opacity = opacity;
+            if (Array.isArray(child.material)) {
+              child.material.forEach((mat) => mat.opacity = opacity);
+            } else {
+              child.material.opacity = opacity;
+            }
           }
         });
       }
@@ -1296,7 +1309,11 @@ function animate() {
       if (saveMesh) {
         saveMesh.traverse((child) => {
           if (child instanceof THREE.Mesh && child.material) {
-            child.material.opacity = opacity;
+            if (Array.isArray(child.material)) {
+              child.material.forEach((mat) => mat.opacity = opacity);
+            } else {
+              child.material.opacity = opacity;
+            }
           }
         });
       }
