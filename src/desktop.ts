@@ -1374,12 +1374,12 @@ function animate() {
       physicsWorld.gravity = {
         x: currentRoll * gravityStrength,
         y: -35.0,
-        z: currentPitch * gravityStrength
+        z: -currentPitch * gravityStrength
       };
 
       // 3. Visual maze rotation matching gravity tilt and phone yaw
       // Using YXZ Euler order applies Y rotation (yaw) first, which rotates the tilt axis with the maze.
-      const visualPitch = -currentPitch * maxTiltAngle;
+      const visualPitch = currentPitch * maxTiltAngle;
       const visualRoll = -currentRoll * maxTiltAngle;
       const visualYaw = currentYaw; 
       const q = new THREE.Quaternion().setFromEuler(
