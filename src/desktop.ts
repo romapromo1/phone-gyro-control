@@ -730,12 +730,6 @@ async function init() {
     saveTemplate = fbx;
     saveTemplate.traverse((child) => {
       if (child instanceof THREE.Mesh) {
-        child.material = new THREE.MeshStandardMaterial({
-          color: 0xffd700, // Gold
-          metalness: 0.95,
-          roughness: 0.08,
-          emissive: 0x443300
-        });
         child.castShadow = true;
         child.receiveShadow = true;
       }
