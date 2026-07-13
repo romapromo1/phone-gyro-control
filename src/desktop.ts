@@ -1193,6 +1193,12 @@ function spawnGameElements() {
   finishLight.name = 'finish-light';
   mazeContainer.add(finishLight); 
 
+  // Dedicated bright white light directly above save.fbx to make it highly visible and bright
+  const saveHighlightLight = new THREE.PointLight(0xffffff, 8, ballRadius * 15);
+  saveHighlightLight.position.set(finishPos.x, finishPos.y + 0.6, finishPos.z);
+  saveHighlightLight.name = 'save-highlight-light';
+  mazeContainer.add(saveHighlightLight);
+
   // Ambient neon light at start
   const startLight = new THREE.PointLight(0x00f0ff, 2, ballRadius * 8);
   startLight.position.set(startPos.x, startPos.y + 0.4, startPos.z);
@@ -1291,6 +1297,8 @@ function animate() {
       if (finishLight) finishLight.intensity = 4.0 * opacity;
       const startLight = mazeContainer.getObjectByName('start-light') as THREE.PointLight;
       if (startLight) startLight.intensity = 2.0 * opacity;
+      const saveHighlight = mazeContainer.getObjectByName('save-highlight-light') as THREE.PointLight;
+      if (saveHighlight) saveHighlight.intensity = 8.0 * opacity;
       
       if (transitionTime >= 0.3) {
         // Fade out complete, switch level
@@ -1328,6 +1336,8 @@ function animate() {
       if (finishLight) finishLight.intensity = 4.0 * opacity;
       const startLight = mazeContainer.getObjectByName('start-light') as THREE.PointLight;
       if (startLight) startLight.intensity = 2.0 * opacity;
+      const saveHighlight = mazeContainer.getObjectByName('save-highlight-light') as THREE.PointLight;
+      if (saveHighlight) saveHighlight.intensity = 8.0 * opacity;
       
       if (transitionTime <= 0.0) {
         isTransitioning = false;
