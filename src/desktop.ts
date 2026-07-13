@@ -1053,7 +1053,7 @@ function buildPhysicsMaze() {
                       RAPIER.TriMeshFlags.DELETE_DUPLICATE_TRIANGLES;
         const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices, flags)
           .setFriction(0.1) // Low friction for walls to prevent sticking when sliding along them
-          .setRestitution(0.1);
+          .setRestitution(0.0);
         physicsWorld.createCollider(colliderDesc, mazeBody ?? undefined);
       } catch (err) {
         console.error('Failed to create collider for child mesh:', err);
@@ -1139,7 +1139,7 @@ function spawnGameElements() {
   ballBody.enableCcd(true);
 
   const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius)
-    .setRestitution(0.15)
+    .setRestitution(0.05)
     .setFriction(0.6);
   physicsWorld.createCollider(ballColliderDesc, ballBody);
 
