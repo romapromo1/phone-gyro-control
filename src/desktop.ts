@@ -1132,8 +1132,8 @@ function spawnGameElements() {
   // 2. Physics representation of the Ball (Dynamic sphere)
   const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic()
     .setTranslation(startPos.x, startPos.y, startPos.z)
-    .setLinearDamping(1.2)
-    .setAngularDamping(1.2)
+    .setLinearDamping(0.3)
+    .setAngularDamping(0.3)
     .setCanSleep(false);
   ballBody = physicsWorld.createRigidBody(ballBodyDesc);
   ballBody.enableCcd(true);
@@ -1371,7 +1371,7 @@ function animate() {
       // 2. Physics world gravity slant in local coordinates
       // Both the visual tilt and physical gravity rotate together with the maze,
       // so they are calculated directly in local space.
-      const gravityStrength = 22.0;
+      const gravityStrength = 35.0;
       physicsWorld.gravity = {
         x: currentRoll * gravityStrength,
         y: -35.0,
