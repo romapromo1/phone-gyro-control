@@ -773,11 +773,11 @@ function loadMazeAsset() {
 
   mazeMaterial = new THREE.MeshPhysicalMaterial({
     color: 0x716cff, // #716cff (requested color)
-    transmission: 0.9,
+    transmission: 0.0, // Set to 0.0 to avoid WebGL transmission pass sorting conflicts
     opacity: 0.6,
     transparent: true,
-    depthWrite: false, // Prevent transparent walls from writing to depth buffer and occluding the ball!
-    roughness: 0.4, // Increased roughness for frosted glass look
+    depthWrite: true, // Restored depth writing to prevent floor clipping/overlap
+    roughness: 0.2, // Lower roughness for a glossy glass/plexiglass finish
     metalness: 0.1,
     ior: 1.5,
     thickness: 1.5,
