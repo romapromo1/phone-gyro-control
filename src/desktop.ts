@@ -694,35 +694,40 @@ async function init() {
   scene.environment = envTarget.texture;
   pmremGenerator.dispose();
 
-  // 2. Add Studio Lights (balanced so floor is well-lit and doesn't get dark or overexposed)
+  // 2. Add Studio Lights (increased intensities so everything is well-lit from all sides)
   // Ambient fill light for base brightness
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
   scene.add(ambientLight);
 
   // Key Light (main light casting shadows with optimized frustum bounds)
-  const mainLight = new THREE.DirectionalLight(0xffffff, 1.0);
+  const mainLight = new THREE.DirectionalLight(0xffffff, 1.8);
   mainLight.position.set(20, 50, 10);
   mainLight.castShadow = true;
   mainLight.shadow.mapSize.width = 2048;
   mainLight.shadow.mapSize.height = 2048;
   mainLight.shadow.bias = -0.0005;
-  mainLight.shadow.camera.left = -10;
-  mainLight.shadow.camera.right = 10;
-  mainLight.shadow.camera.top = 10;
-  mainLight.shadow.camera.bottom = -10;
+  mainLight.shadow.camera.left = -15;
+  mainLight.shadow.camera.right = 15;
+  mainLight.shadow.camera.top = 15;
+  mainLight.shadow.camera.bottom = -15;
   mainLight.shadow.camera.near = 0.5;
-  mainLight.shadow.camera.far = 100;
+  mainLight.shadow.camera.far = 120;
   scene.add(mainLight);
 
   // Fill Light (soft light from the opposite side to brighten shadows)
-  const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+  const fillLight = new THREE.DirectionalLight(0xffffff, 1.2);
   fillLight.position.set(-20, 30, 10);
   scene.add(fillLight);
 
   // Rim Light (backlight highlighting edges of walls and floor)
-  const rimLight = new THREE.DirectionalLight(0xffffff, 0.3);
+  const rimLight = new THREE.DirectionalLight(0xffffff, 1.0);
   rimLight.position.set(0, 30, -20);
   scene.add(rimLight);
+
+  // Front Light (direct light from the camera/front side)
+  const frontLight = new THREE.DirectionalLight(0xffffff, 1.2);
+  frontLight.position.set(0, 30, 40);
+  scene.add(frontLight);
 
   // Load Save 3D asset template
   const fbxLoader = new FBXLoader();
