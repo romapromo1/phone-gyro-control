@@ -1371,7 +1371,7 @@ function animate() {
       // 2. Physics world gravity slant in local coordinates
       // Both the visual tilt and physical gravity rotate together with the maze,
       // so they are calculated directly in local space.
-      const gravityStrength = 35.0;
+      const gravityStrength = 31.0;
       physicsWorld.gravity = {
         x: currentRoll * gravityStrength,
         y: -35.0,
