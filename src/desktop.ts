@@ -776,6 +776,7 @@ function loadMazeAsset() {
     transmission: 0.9,
     opacity: 0.6,
     transparent: true,
+    depthWrite: false, // Prevent transparent walls from writing to depth buffer and occluding the ball!
     roughness: 0.4, // Increased roughness for frosted glass look
     metalness: 0.1,
     ior: 1.5,
