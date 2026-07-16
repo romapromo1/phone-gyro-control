@@ -553,3 +553,44 @@
 .hud-restart-btn:active {
   transform: translateY(0);
 }
+
+/* Start Screen Overlay Styles */
+#start-overlay {
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: auto;
+}
+
+.start-screen-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.start-btn {
+  margin-top: 20px;
+  padding: 18px 56px;
+  font-size: 28px;
+  font-weight: 800;
+  border-radius: 40px;
+  background: white;
+  border: 3px solid var(--accent-cyan);
+  color: var(--accent-cyan);
+  box-shadow: 0 8px 30px rgba(0, 102, 204, 0.2);
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.start-btn:hover {
+  background: var(--accent-cyan);
+  color: white;
+  box-shadow: 0 12px 40px rgba(0, 102, 204, 0.4);
+  transform: translateY(-2px);
+}
+
+.start-btn:active {
+  transform: translateY(1px);
+}

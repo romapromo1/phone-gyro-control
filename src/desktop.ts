@@ -31,6 +31,10 @@ const btnHudRestart = document.getElementById('btn-hud-restart') as HTMLButtonEl
 const modalTitle = document.getElementById('modal-title') as HTMLElement;
 const modalSubtitle = document.getElementById('modal-subtitle') as HTMLElement;
 
+// Start Screen elements
+const startOverlay = document.getElementById('start-overlay') as HTMLElement;
+const btnStartGame = document.getElementById('btn-start-game') as HTMLButtonElement;
+
 // Maze level management (Level 2 to Level 7 from /new/)
 const MAZE_FILES = [
   '/source/fixed/labirint2.fbx',
@@ -61,6 +65,12 @@ let gameTimerInterval: any = null;
 // Transition and save object state
 let saveTemplate: THREE.Group | null = null;
 let saveMesh: THREE.Group | null = null;
+
+// Start Screen Templates & Group
+let seivyTemplate: THREE.Group | null = null;
+let otYPayTemplate: THREE.Group | null = null;
+let startScreenGroup: THREE.Group | null = null;
+let isStartScreenActive = false;
 
 let isSaveCollectedAnimation = false;
 let saveOrigPos = new THREE.Vector3();
@@ -295,12 +305,12 @@ socket.on('connect', () => {
 socket.on('gyro-update', (data: { beta: number; gamma: number; alpha?: number }) => {
   if (isFirstTelemetry) {
     pairingOverlay.classList.add('hidden');
-    hudOverlay.classList.remove('hidden');
+    startOverlay.classList.remove('hidden');
     isFirstTelemetry = false;
     // Initialize audio context
     sounds.init();
-    // Start game mode
-    startNewGame();
+    // Show start screen mode
+    showStartScreen();
   }
 
   // Save raw normalized sensor telemetry (-1.0 to 1.0)
@@ -631,6 +641,118 @@ function getGeometryBoundingBox(object: THREE.Object3D | null): THREE.Box3 {
   return box;
 }
 
+function createCenteredAndScaledModel(fbx: THREE.Group, targetSize: number): THREE.Group {
+  const wrapper = new THREE.Group();
+  const box = getGeometryBoundingBox(fbx);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const scale = (maxDim > 0.0001) ? (targetSize / maxDim) : 1.0;
+  fbx.position.set(-center.x, -center.y, -center.z);
+  wrapper.add(fbx);
+  wrapper.scale.set(scale, scale, scale);
+  return wrapper;
+}
+
+function setupStartScreen() {
+  if (startScreenGroup) return;
+  startScreenGroup = new THREE.Group();
+  startScreenGroup.name = 'start-screen-group';
+  
+  const shadowPlaneGeo = new THREE.PlaneGeometry(100, 100);
+  const shadowPlaneMat = new THREE.ShadowMaterial({ opacity: 0.15 });
+  const shadowPlane = new THREE.Mesh(shadowPlaneGeo, shadowPlaneMat);
+  shadowPlane.position.set(0, 0, -2.0);
+  shadowPlane.receiveShadow = true;
+  startScreenGroup.add(shadowPlane);
+  
+  const startLight = new THREE.DirectionalLight(0xffffff, 2.5);
+  startLight.position.set(5, 8, 12);
+  startLight.castShadow = true;
+  startLight.shadow.mapSize.width = 2048;
+  startLight.shadow.mapSize.height = 2048;
+  startLight.shadow.bias = -0.0005;
+  startLight.shadow.camera.left = -6;
+  startLight.shadow.camera.right = 6;
+  startLight.shadow.camera.top = 8;
+  startLight.shadow.camera.bottom = -8;
+  startLight.shadow.camera.near = 0.5;
+  startLight.shadow.camera.far = 25;
+  startScreenGroup.add(startLight);
+  
+  const startAmbient = new THREE.AmbientLight(0xffffff, 0.9);
+  startScreenGroup.add(startAmbient);
+  
+  if (seivyTemplate) {
+    const seivyModel = seivyTemplate.clone();
+    seivyModel.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    const seivyCentered = createCenteredAndScaledModel(seivyModel, 5.5);
+    seivyCentered.position.set(0, 2.5, 0);
+    startScreenGroup.add(seivyCentered);
+  }
+  
+  if (otYPayTemplate) {
+    const otYPayModel = otYPayTemplate.clone();
+    otYPayModel.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    const otYPayCentered = createCenteredAndScaledModel(otYPayModel, 3.5);
+    otYPayCentered.position.set(0, -1.5, 0);
+    startScreenGroup.add(otYPayCentered);
+  }
+  scene.add(startScreenGroup);
+}
+
+function showStartScreen() {
+  isStartScreenActive = true;
+  mazeContainer.visible = false;
+  setupStartScreen();
+  if (startScreenGroup) {
+    startScreenGroup.visible = true;
+  }
+  
+  const mainLight = scene.getObjectByName('main-light');
+  if (mainLight) mainLight.visible = false;
+  const fillLight = scene.getObjectByName('fill-light');
+  if (fillLight) fillLight.visible = false;
+  const rimLight = scene.getObjectByName('rim-light');
+  if (rimLight) rimLight.visible = false;
+  const frontLight = scene.getObjectByName('front-light');
+  if (frontLight) frontLight.visible = false;
+  
+  camera.position.set(0, 0.5, 10);
+  camera.lookAt(0, 0.5, 0);
+  camera.up.set(0, 1, 0);
+}
+
+function hideStartScreen() {
+  isStartScreenActive = false;
+  if (startScreenGroup) {
+    scene.remove(startScreenGroup);
+    startScreenGroup = null;
+  }
+  mazeContainer.visible = true;
+  
+  const mainLight = scene.getObjectByName('main-light');
+  if (mainLight) mainLight.visible = true;
+  const fillLight = scene.getObjectByName('fill-light');
+  if (fillLight) fillLight.visible = true;
+  const rimLight = scene.getObjectByName('rim-light');
+  if (rimLight) rimLight.visible = true;
+  const frontLight = scene.getObjectByName('front-light');
+  if (frontLight) frontLight.visible = true;
+}
+
 // Initialize Graphics & Physics
 async function init() {
   // 1. Initialize Rapier Physics WASM
@@ -712,21 +834,25 @@ async function init() {
   mainLight.shadow.camera.bottom = -15;
   mainLight.shadow.camera.near = 0.5;
   mainLight.shadow.camera.far = 120;
+  mainLight.name = 'main-light';
   scene.add(mainLight);
 
   // Fill Light (soft light from the opposite side to brighten shadows)
   const fillLight = new THREE.DirectionalLight(0xffffff, 1.2);
   fillLight.position.set(-20, 30, 10);
+  fillLight.name = 'fill-light';
   scene.add(fillLight);
 
   // Rim Light (backlight highlighting edges of walls and floor)
   const rimLight = new THREE.DirectionalLight(0xffffff, 1.0);
   rimLight.position.set(0, 30, -20);
+  rimLight.name = 'rim-light';
   scene.add(rimLight);
 
   // Front Light (direct light from the camera/front side)
   const frontLight = new THREE.DirectionalLight(0xffffff, 1.2);
   frontLight.position.set(0, 30, 40);
+  frontLight.name = 'front-light';
   scene.add(frontLight);
 
   // Load Save 3D asset template
@@ -742,6 +868,42 @@ async function init() {
     debugLog('Loaded save.fbx template successfully.');
   }, undefined, (err) => {
     console.error('Error loading save.fbx template:', err);
+  });
+
+  // Load seivy.fbx template for Start Screen
+  fbxLoader.load('/3d/seivy.fbx', (fbx) => {
+    seivyTemplate = fbx;
+    seivyTemplate.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    debugLog('Loaded seivy.fbx template successfully.');
+  }, undefined, (err) => {
+    console.error('Error loading seivy.fbx template:', err);
+  });
+
+  // Load ot Y-Pay.fbx template for Start Screen
+  fbxLoader.load('/3d/ot Y-Pay.fbx', (fbx) => {
+    otYPayTemplate = fbx;
+    otYPayTemplate.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    debugLog('Loaded ot Y-Pay.fbx template successfully.');
+  }, undefined, (err) => {
+    console.error('Error loading ot Y-Pay.fbx template:', err);
+  });
+
+  // Bind 2D Start Button Click Event
+  btnStartGame.addEventListener('click', () => {
+    hideStartScreen();
+    hudOverlay.classList.remove('hidden');
+    startOverlay.classList.add('hidden');
+    startNewGame();
   });
 
   // Load the Maze asset
@@ -1235,7 +1397,12 @@ function onWindowResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  positionCamera();
+  if (isStartScreenActive) {
+    camera.position.set(0, 0.5, 10);
+    camera.lookAt(0, 0.5, 0);
+  } else {
+    positionCamera();
+  }
 }
 
 // Game loop
@@ -1243,6 +1410,19 @@ function animate() {
   requestAnimationFrame(animate);
 
   const dt = clock.getDelta();
+
+  // Start Screen Floating Text Animations
+  if (isStartScreenActive && startScreenGroup) {
+    startScreenGroup.children.forEach((child) => {
+      if (child instanceof THREE.Group) {
+        // Slow float up/down bobbing
+        const offset = Math.sin(Date.now() * 0.002 + child.position.y * 5.0) * 0.003;
+        child.position.y += offset;
+        // Subtle tilt oscillation
+        child.rotation.y = Math.sin(Date.now() * 0.001 + child.position.y * 3.0) * 0.08;
+      }
+    });
+  }
 
   // 1. Static/collected Saves animation (rotate slowly in the sky)
   scene.traverse((child) => {
@@ -1364,7 +1544,7 @@ function animate() {
   }
 
   if (physicsWorld && ballBody && ballMesh) {
-    if (isLevelLoading) {
+    if (isLevelLoading || isStartScreenActive) {
       // Keep everything flat and unrotated during level build
       currentPitch = 0;
       currentRoll = 0;
