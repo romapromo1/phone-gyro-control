@@ -41,18 +41,8 @@ const btnDebugToggle = document.getElementById('btn-debug-toggle') as HTMLButton
 const debugPanel = document.getElementById('debug-panel') as HTMLElement;
 const debugLevelSelect = document.getElementById('debug-level-select') as HTMLSelectElement;
 
-const sliderGateX = document.getElementById('slider-gate-x') as HTMLInputElement;
-const sliderGateZ = document.getElementById('slider-gate-z') as HTMLInputElement;
-const sliderGateRy = document.getElementById('slider-gate-ry') as HTMLInputElement;
-const sliderGateScale = document.getElementById('slider-gate-scale') as HTMLInputElement;
-
 const sliderSaveX = document.getElementById('slider-save-x') as HTMLInputElement;
 const sliderSaveZ = document.getElementById('slider-save-z') as HTMLInputElement;
-
-const valGateX = document.getElementById('val-gate-x') as HTMLElement;
-const valGateZ = document.getElementById('val-gate-z') as HTMLElement;
-const valGateRy = document.getElementById('val-gate-ry') as HTMLElement;
-const valGateScale = document.getElementById('val-gate-scale') as HTMLElement;
 
 const valSaveX = document.getElementById('val-save-x') as HTMLElement;
 const valSaveZ = document.getElementById('val-save-z') as HTMLElement;
@@ -92,8 +82,6 @@ let saveMesh: THREE.Group | null = null;
 
 // Football and Gates Templates & State
 let footballTemplate: THREE.Group | null = null;
-let gatesTemplate: THREE.Group | null = null;
-let gatesMesh: THREE.Group | null = null;
 let isSaveCollected = false;
 let collectedSavesList: THREE.Object3D[] = [];
 let saveAnimMesh: THREE.Group | null = null;
@@ -101,7 +89,6 @@ let saveAnimStartWorld = new THREE.Vector3();
 let saveAnimTime = 0.0;
 const SAVE_ANIM_DURATION = 0.8;
 let isDebugModeActive = false;
-let defaultGatesScale = 1.0;
 
 // Start Screen State
 let isStartScreenActive = false;
@@ -558,10 +545,8 @@ function startNewGame() {
   // Reset states
   isSaveCollected = false;
   saveAnimMesh = null;
-  if (gatesMesh) {
-    mazeContainer.remove(gatesMesh);
-    gatesMesh = null;
-  }
+  const oldGates = mazeContainer.getObjectByName('football-gates');
+  if (oldGates) mazeContainer.remove(oldGates);
   
   // Clear any remaining floating saves
   const savesToRemove: THREE.Object3D[] = [];
@@ -602,6 +587,9 @@ function collectSave() {
   saveMesh = null;
   saveAnimStartWorld.copy(worldPos);
   saveAnimTime = 0.0;
+
+  // Save collected -> transition to next level immediately!
+  completeLevel();
 }
 
 function completeLevel() {
@@ -755,33 +743,16 @@ function initDebugControls() {
   });
 
   const onSliderChange = () => {
-    if (!gatesMesh || !saveMesh) return;
-    
-    const gx = parseFloat(sliderGateX.value);
-    const gz = parseFloat(sliderGateZ.value);
-    const gry = parseFloat(sliderGateRy.value) * Math.PI / 180;
-    const gs = parseFloat(sliderGateScale.value);
+    if (!saveMesh) return;
     
     const sx = parseFloat(sliderSaveX.value);
     const sz = parseFloat(sliderSaveZ.value);
-    
-    // Update Gates
-    gatesMesh.position.x = gx;
-    gatesMesh.position.z = gz;
-    gatesMesh.rotation.y = gry;
-    const finalScale = defaultGatesScale * gs;
-    gatesMesh.scale.set(finalScale, finalScale, finalScale);
     
     // Update Save
     saveMesh.position.x = sx;
     saveMesh.position.z = sz;
     
     // Update labels
-    valGateX.textContent = gx.toFixed(2);
-    valGateZ.textContent = gz.toFixed(2);
-    valGateRy.textContent = sliderGateRy.value;
-    valGateScale.textContent = gs.toFixed(2);
-    
     valSaveX.textContent = sx.toFixed(2);
     valSaveZ.textContent = sz.toFixed(2);
     
@@ -789,32 +760,19 @@ function initDebugControls() {
     updateDebugOutputText();
   };
 
-  const sliders = [sliderGateX, sliderGateZ, sliderGateRy, sliderGateScale, sliderSaveX, sliderSaveZ];
+  const sliders = [sliderSaveX, sliderSaveZ];
   sliders.forEach(s => {
     s.addEventListener('input', onSliderChange);
   });
 }
 
 function syncDebugSlidersFromScene() {
-  if (!gatesMesh || !saveMesh) return;
-  
-  sliderGateX.value = String(gatesMesh.position.x);
-  sliderGateZ.value = String(gatesMesh.position.z);
-  sliderGateRy.value = String(Math.round(gatesMesh.rotation.y * 180 / Math.PI));
-  
-  const curScaleX = gatesMesh.scale.x;
-  const scaleMult = curScaleX / defaultGatesScale;
-  sliderGateScale.value = String(scaleMult);
+  if (!saveMesh) return;
   
   sliderSaveX.value = String(saveMesh.position.x);
   sliderSaveZ.value = String(saveMesh.position.z);
   
   // Set text labels
-  valGateX.textContent = gatesMesh.position.x.toFixed(2);
-  valGateZ.textContent = gatesMesh.position.z.toFixed(2);
-  valGateRy.textContent = String(Math.round(gatesMesh.rotation.y * 180 / Math.PI));
-  valGateScale.textContent = scaleMult.toFixed(2);
-  
   valSaveX.textContent = saveMesh.position.x.toFixed(2);
   valSaveZ.textContent = saveMesh.position.z.toFixed(2);
   
@@ -822,9 +780,8 @@ function syncDebugSlidersFromScene() {
 }
 
 function updateDebugOutputText() {
-  if (!gatesMesh || !saveMesh) return;
+  if (!saveMesh) return;
   
-  const ryDeg = Math.round(gatesMesh.rotation.y * 180 / Math.PI);
   const data = {
     levelIndex: currentMazeIndex,
     levelName: MAZE_FILES[currentMazeIndex].split('/').pop(),
@@ -832,13 +789,6 @@ function updateDebugOutputText() {
       x: parseFloat(saveMesh.position.x.toFixed(3)),
       y: parseFloat(saveMesh.position.y.toFixed(3)),
       z: parseFloat(saveMesh.position.z.toFixed(3))
-    },
-    gates: {
-      x: parseFloat(gatesMesh.position.x.toFixed(3)),
-      y: parseFloat(gatesMesh.position.y.toFixed(3)),
-      z: parseFloat(gatesMesh.position.z.toFixed(3)),
-      ryDeg: ryDeg,
-      scale: parseFloat(parseFloat(sliderGateScale.value).toFixed(2))
     }
   };
   debugOutput.value = JSON.stringify(data, null, 2);
@@ -978,19 +928,7 @@ async function init() {
     console.error('Error loading football.glb template:', err);
   });
 
-  // Load football gates.fbx template
-  fbxLoader.load('/source/football gates.fbx', (fbx) => {
-    gatesTemplate = fbx;
-    gatesTemplate.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-    debugLog('Loaded football gates.fbx template successfully.');
-  }, undefined, (err) => {
-    console.error('Error loading football gates.fbx template:', err);
-  });
+
 
   // Bind 2D Start Button Click Event
   btnStartGame.addEventListener('click', () => {
@@ -1437,64 +1375,11 @@ function spawnGameElements() {
     .setFriction(0.6);
   physicsWorld.createCollider(ballColliderDesc, ballBody);
 
-  // Calculate approach direction from startPos to finishPos to dynamically face/position gates
-  const approachDir = new THREE.Vector3().subVectors(finishPos, startPos);
-  approachDir.y = 0;
-  approachDir.normalize();
-  const approachAngle = Math.atan2(approachDir.x, approachDir.z);
-
-  // 3. Spawn Football Gates behind the save item
-  if (gatesTemplate) {
-    gatesMesh = gatesTemplate.clone();
-    gatesMesh.name = 'football-gates';
-    gatesMesh.position.copy(finishPos);
-    gatesMesh.rotation.y = approachAngle; // face approach direction
-
-    // Scale gates
-    const gatesBox = getGeometryBoundingBox(gatesMesh);
-    const gatesSizeVec = new THREE.Vector3();
-    gatesBox.getSize(gatesSizeVec);
-    const maxDim = Math.max(gatesSizeVec.x, gatesSizeVec.y, gatesSizeVec.z);
-    const targetGatesSize = ballRadius * 6.5; // width about 1.6 units
-    defaultGatesScale = (maxDim > 0.0001) ? (targetGatesSize / maxDim) : 1.0;
-    gatesMesh.scale.set(defaultGatesScale, defaultGatesScale, defaultGatesScale);
-
-    // Keep gates aligned on the level floor
-    gatesMesh.position.y = floorTopY + 0.03;
-
-    gatesMesh.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-        if (child.material) {
-          if (Array.isArray(child.material)) {
-            child.material = child.material.map((mat) => {
-              const cloned = mat.clone();
-              cloned.transparent = true;
-              cloned.opacity = isTransitioning ? 0.0 : 1.0;
-              return cloned;
-            });
-          } else {
-            child.material = child.material.clone();
-            child.material.transparent = true;
-            child.material.opacity = isTransitioning ? 0.0 : 1.0;
-          }
-        }
-      }
-    });
-
-    mazeContainer.add(gatesMesh);
-  }
-
-  // 4. Spawn Save Item in front of the gates
+  // 3. Spawn Save Item directly at finishPos
   if (saveTemplate) {
     saveMesh = saveTemplate.clone();
     saveMesh.name = 'save-item';
-
-    // Position save item in front of the gates (along -approachDir)
-    const saveOffsetDist = ballRadius * 3.5; // offset towards start
-    const saveWorldPos = finishPos.clone().addScaledVector(approachDir, -saveOffsetDist);
-    saveMesh.position.copy(saveWorldPos);
+    saveMesh.position.copy(finishPos);
 
     // Scale saveMesh
     const saveBox = getGeometryBoundingBox(saveMesh);
@@ -1691,8 +1576,9 @@ function animate() {
           }
         });
       }
-      if (gatesMesh) {
-        gatesMesh.traverse((child) => {
+      const gates = mazeContainer.getObjectByName('football-gates');
+      if (gates) {
+        gates.traverse((child) => {
           if (child instanceof THREE.Mesh && child.material) {
             if (Array.isArray(child.material)) {
               child.material.forEach((mat) => {
@@ -1761,8 +1647,9 @@ function animate() {
           }
         });
       }
-      if (gatesMesh) {
-        gatesMesh.traverse((child) => {
+      const gates = mazeContainer.getObjectByName('football-gates');
+      if (gates) {
+        gates.traverse((child) => {
           if (child instanceof THREE.Mesh && child.material) {
             if (Array.isArray(child.material)) {
               child.material.forEach((mat) => {
@@ -1933,14 +1820,6 @@ function animate() {
       const distToSave = ballWorldPos.distanceTo(saveMesh.position);
       if (distToSave < (ballRadius + (ballRadius * 1.6) * 0.8) && isGameActive && !isTransitioning) {
         collectSave();
-      }
-    }
-    
-    // Gates level completion check (only after save has been collected!)
-    if (isSaveCollected) {
-      const distToGates = ballWorldPos.distanceTo(finishPos);
-      if (distToGates < (ballRadius + finishRadius * 1.5) && isGameActive && !isTransitioning) {
-        completeLevel();
       }
     }
   }
