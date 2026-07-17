@@ -276,8 +276,8 @@
   height: 44px;
   border-radius: 50%;
   background: #C5DFFC;
-  border: 2px solid #DDFF68;
-  color: #000000;
+  border: 2px solid #080245;
+  color: #080245;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -292,9 +292,10 @@
 }
 
 .settings-btn:hover {
-  color: #000000;
-  border-color: #DDFF68;
-  box-shadow: 0 0 15px rgba(221, 255, 104, 0.6);
+  background: #DDFF68;
+  color: #080245;
+  border-color: #080245;
+  box-shadow: 0 0 15px rgba(8, 2, 69, 0.3);
 }
 
 .settings-btn svg {
@@ -529,8 +530,8 @@
 
 .hud-restart-btn {
   background: #C5DFFC;
-  border: 2px solid #DDFF68;
-  color: #000000;
+  border: 2px solid #080245;
+  color: #080245;
   font-weight: 700;
   font-size: 11px;
   letter-spacing: 1px;
@@ -543,10 +544,10 @@
 }
 
 .hud-restart-btn:hover {
-  background: #C5DFFC;
-  color: #000000;
-  border-color: #DDFF68;
-  box-shadow: 0 0 15px rgba(221, 255, 104, 0.6);
+  background: #DDFF68;
+  color: #080245;
+  border-color: #080245;
+  box-shadow: 0 0 15px rgba(8, 2, 69, 0.3);
   transform: translateY(-1px);
 }
 
@@ -595,19 +596,19 @@
   font-weight: 800;
   border-radius: 40px;
   background: #C5DFFC;
-  border: 3px solid #DDFF68;
-  color: #000000;
-  box-shadow: 0 8px 30px rgba(221, 255, 104, 0.2);
+  border: 3px solid #080245;
+  color: #080245;
+  box-shadow: 0 8px 30px rgba(8, 2, 69, 0.15);
   transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
   pointer-events: auto;
   cursor: pointer;
 }
 
 .start-btn:hover {
-  background: #C5DFFC;
-  color: #000000;
-  border-color: #DDFF68;
-  box-shadow: 0 12px 40px rgba(221, 255, 104, 0.5);
+  background: #DDFF68;
+  color: #080245;
+  border-color: #080245;
+  box-shadow: 0 12px 40px rgba(8, 2, 69, 0.3);
   transform: translateY(-2px);
 }
 
