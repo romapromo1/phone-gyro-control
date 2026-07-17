@@ -53,25 +53,21 @@ const debugOutput = document.getElementById('debug-output') as HTMLTextAreaEleme
 const MAZE_FILES = [
   '/source/fixed/labirint2.fbx',
   '/source/fixed/labirint3.fbx',
-  '/source/fixed/labirint4.fbx',
   '/source/fixed/labirint5.fbx',
-  '/source/fixed/labirint6.fbx',
   '/source/fixed/labirint7.fbx'
 ];
 const DEFAULT_SAVE_COORDS = [
   { x: 5.3,   z: 1.8 },   // Лабиринт 2 (индекс 0)
   { x: -2.95, z: -2.95 }, // Лабиринт 3 (индекс 1)
-  { x: -1.8,  z: 1.8 },   // Лабиринт 4 (индекс 2)
-  { x: 2.9,   z: -0.55 }, // Лабиринт 5 (индекс 3)
-  { x: 1.8,   z: 5.3 },   // Лабиринт 6 (индекс 4)
-  { x: 4.15,  z: -1.8 }   // Лабиринт 7 (индекс 5)
+  { x: 2.9,   z: -0.55 }, // Лабиринт 5 (индекс 2)
+  { x: 4.15,  z: -1.8 }   // Лабиринт 7 (индекс 3)
 ];
 let currentMazeIndex = 0;
 let isAnimating = false; // prevent calling animate() multiple times
 
 // Game mode state variables
 let savesCollected = 0;
-const totalSavesGoal = 6;
+const totalSavesGoal = 4;
 let gameTimeLeft = 60.0;
 let isGameActive = false;
 let gameTimerInterval: any = null;
