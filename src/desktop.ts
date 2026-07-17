@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { io } from 'socket.io-client';
 
@@ -66,15 +67,22 @@ let gameTimerInterval: any = null;
 let saveTemplate: THREE.Group | null = null;
 let saveMesh: THREE.Group | null = null;
 
+// Football and Gates Templates & State
+let footballTemplate: THREE.Group | null = null;
+let gatesTemplate: THREE.Group | null = null;
+let gatesMesh: THREE.Group | null = null;
+let isSaveCollected = false;
+let collectedSavesList: THREE.Object3D[] = [];
+let saveAnimMesh: THREE.Group | null = null;
+let saveAnimStartWorld = new THREE.Vector3();
+let saveAnimTime = 0.0;
+const SAVE_ANIM_DURATION = 0.8;
+
 // Start Screen Templates & Group
 let seivyTemplate: THREE.Group | null = null;
 let otYPayTemplate: THREE.Group | null = null;
 let startScreenGroup: THREE.Group | null = null;
 let isStartScreenActive = false;
-
-let isSaveCollectedAnimation = false;
-let saveOrigPos = new THREE.Vector3();
-let saveAnimProgress = 0.0;
 
 let isTransitioning = false;
 let transitionTime = 0.0;
@@ -234,7 +242,7 @@ let clock: THREE.Clock;
 
 let physicsWorld: RAPIER.World;
 let ballBody: RAPIER.RigidBody | null = null;
-let ballMesh: THREE.Mesh | null = null;
+let ballMesh: THREE.Object3D | null = null;
 let ballRadius = 0.25; 
 let mazeContainer: THREE.Group; // Outer group centered at (0, 0, 0) which we rotate
 let mazeGroup: THREE.Group | null = null;   // Inner group containing FBX mesh shifted by -center
@@ -521,7 +529,19 @@ function startNewGame() {
     victoryOverlay.classList.add('hidden');
   }
   
-  // Clear any static saves from the scene
+  // Clear any static saves from the camera-HUD
+  collectedSavesList.forEach(s => camera.remove(s));
+  collectedSavesList = [];
+
+  // Reset states
+  isSaveCollected = false;
+  saveAnimMesh = null;
+  if (gatesMesh) {
+    mazeContainer.remove(gatesMesh);
+    gatesMesh = null;
+  }
+  
+  // Clear any remaining floating saves
   const savesToRemove: THREE.Object3D[] = [];
   scene.traverse((child) => {
     if (child.name === 'save-item' && child.parent === scene) {
@@ -530,44 +550,41 @@ function startNewGame() {
   });
   savesToRemove.forEach(s => scene.remove(s));
   
-  currentLevelSpan.textContent = String(currentMazeIndex + 2).padStart(2, '0');
+  currentLevelSpan.textContent = String(currentMazeIndex + 1).padStart(2, '0');
   loadMazeAsset();
   
   startTimer();
 }
 
 function collectSave() {
-  if (isTransitioning || !isGameActive) return;
+  if (isTransitioning || !isGameActive || isSaveCollected || !saveMesh) return;
   
+  isSaveCollected = true;
   savesCollected++;
   if (savesSpan) {
     savesSpan.textContent = `${savesCollected} / ${totalSavesGoal}`;
   }
   sounds.playVictory();
   
-  // Trigger save flight animation
-  if (saveMesh) {
-    isSaveCollectedAnimation = true;
-    saveOrigPos.copy(saveMesh.position);
-    saveAnimProgress = 0.0;
-    
-    // Reparent saveMesh to scene so it stays static
-    saveMesh.updateMatrixWorld(true);
-    const worldPos = new THREE.Vector3();
-    const worldQuat = new THREE.Quaternion();
-    const worldScale = new THREE.Vector3();
-    saveMesh.matrixWorld.decompose(worldPos, worldQuat, worldScale);
-    
-    mazeContainer.remove(saveMesh);
-    scene.add(saveMesh);
-    
-    saveMesh.position.copy(worldPos);
-    saveMesh.quaternion.copy(worldQuat);
-    saveMesh.scale.copy(worldScale);
-    
-    saveOrigPos.copy(worldPos);
-  }
+  // Start the fly-up animation to camera slot
+  const worldPos = new THREE.Vector3();
+  saveMesh.getWorldPosition(worldPos);
   
+  saveAnimMesh = saveMesh;
+  saveAnimMesh.position.copy(worldPos);
+  
+  // Reparent to scene so it does not tilt with the maze container
+  mazeContainer.remove(saveMesh);
+  scene.add(saveAnimMesh);
+  
+  saveMesh = null;
+  saveAnimStartWorld.copy(worldPos);
+  saveAnimTime = 0.0;
+}
+
+function completeLevel() {
+  if (isTransitioning || !isGameActive) return;
+
   // Check if we collected all 6 saves!
   if (savesCollected >= totalSavesGoal) {
     endGame(true); // Game Won!
@@ -739,6 +756,20 @@ function setupStartScreen() {
     otYPayCentered.position.set(0, -1.5, 0);
     startScreenGroup.add(otYPayCentered);
   }
+}
+
+function getSaveCameraSlotPos(index: number): THREE.Vector3 {
+  const aspect = camera ? camera.aspect : 0.56;
+  const fov = camera ? camera.fov : 45;
+  const vHeight = 2.0 * Math.tan(fov * Math.PI / 360) * 4.0;
+  const vWidth = vHeight * aspect;
+  
+  // Position slots in camera local coordinates (top right, slightly offset)
+  const slotX = vWidth * 0.44 - index * 0.28;
+  const slotY = vHeight * 0.42;
+  const slotZ = -4.0; // 4.0 units in front of camera
+  
+  return new THREE.Vector3(slotX, slotY, slotZ);
 }
 
 function showStartScreen() {
@@ -921,6 +952,35 @@ async function init() {
     console.error('Error loading ot Y-Pay.fbx template:', err);
   });
 
+  // Load football.glb template
+  const gltfLoader = new GLTFLoader();
+  gltfLoader.load('/source/football.glb', (gltf) => {
+    footballTemplate = gltf.scene;
+    footballTemplate.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    debugLog('Loaded football.glb template successfully.');
+  }, undefined, (err) => {
+    console.error('Error loading football.glb template:', err);
+  });
+
+  // Load football gates.fbx template
+  fbxLoader.load('/source/football gates.fbx', (fbx) => {
+    gatesTemplate = fbx;
+    gatesTemplate.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    debugLog('Loaded football gates.fbx template successfully.');
+  }, undefined, (err) => {
+    console.error('Error loading football gates.fbx template:', err);
+  });
+
   // Bind 2D Start Button Click Event
   btnStartGame.addEventListener('click', () => {
     hideStartScreen();
@@ -929,8 +989,8 @@ async function init() {
     fetchServerInfo();
   });
 
-  // Load the Maze asset
-  currentLevelSpan.textContent = String(currentMazeIndex + 2).padStart(2, '0');
+  // Load the Maze asset (they just go in order from 01 to 06)
+  currentLevelSpan.textContent = String(currentMazeIndex + 1).padStart(2, '0');
   loadMazeAsset();
 
   // Show Start Screen immediately on launch
@@ -1301,60 +1361,23 @@ function spawnGameElements() {
     );
   }
 
-  // 1. Visual representation of the Ball (Glowing holographic sphere)
-  const ballGeo = new THREE.SphereGeometry(ballRadius, 32, 32);
-  const ballMat = new THREE.MeshStandardMaterial({
-    color: 0x00f0ff,
-    emissive: 0x003366,
-    roughness: 0.15,
-    metalness: 0.95,
-    transparent: true,
-    opacity: isTransitioning ? 0.0 : 1.0
-  });
-  ballMesh = new THREE.Mesh(ballGeo, ballMat);
-  ballMesh.castShadow = true;
-  ballMesh.receiveShadow = true;
-  mazeContainer.add(ballMesh); 
-
-  // 2. Physics representation of the Ball (Dynamic sphere)
-  const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic()
-    .setTranslation(startPos.x, startPos.y, startPos.z)
-    .setLinearDamping(0.3)
-    .setAngularDamping(0.3)
-    .setCanSleep(false);
-  ballBody = physicsWorld.createRigidBody(ballBodyDesc);
-  ballBody.enableCcd(true);
-
-  const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius)
-    .setRestitution(0.05)
-    .setFriction(0.6);
-  physicsWorld.createCollider(ballColliderDesc, ballBody);
-
-  if (saveTemplate) {
-    saveMesh = saveTemplate.clone();
-    saveMesh.name = 'save-item';
-    saveMesh.position.copy(finishPos);
+  // 1. Visual representation of the Ball (Cloned GLB Football model or holographic sphere fallback)
+  if (footballTemplate) {
+    ballMesh = footballTemplate.clone();
     
-    // Calculate raw size of saveMesh to scale dynamically to target size (ballRadius * 1.6)
-    const saveBox = getGeometryBoundingBox(saveMesh);
-    const saveSizeVec = new THREE.Vector3();
-    saveBox.getSize(saveSizeVec);
-    const maxDim = Math.max(saveSizeVec.x, saveSizeVec.y, saveSizeVec.z);
+    // Normalize football size to fit the physics ballRadius * 2
+    const ballBox = getGeometryBoundingBox(ballMesh);
+    const sizeVec = new THREE.Vector3();
+    ballBox.getSize(sizeVec);
+    const maxDim = Math.max(sizeVec.x, sizeVec.y, sizeVec.z);
+    const scale = (maxDim > 0.0001) ? ((ballRadius * 2.0) / maxDim) : 1.0;
+    ballMesh.scale.set(scale, scale, scale);
     
-    const targetSize = ballRadius * 1.6;
-    const finalScale = (maxDim > 0.0001) ? (targetSize / maxDim) : targetSize;
-    saveMesh.scale.set(finalScale, finalScale, finalScale);
-    
-    // Lift the save disk slightly so it rests on top of the platform/floor rather than clipping into it
-    saveMesh.position.y += targetSize * 0.6;
-    
-    saveMesh.traverse((child) => {
+    ballMesh.traverse((child) => {
       if (child instanceof THREE.Mesh) {
-        child.visible = true;
         child.castShadow = true;
         child.receiveShadow = true;
         if (child.material) {
-          // Clone material(s) to control individual opacity, supporting both single and multi-materials
           if (Array.isArray(child.material)) {
             child.material = child.material.map((mat) => {
               const cloned = mat.clone();
@@ -1370,6 +1393,127 @@ function spawnGameElements() {
         }
       }
     });
+  } else {
+    const ballGeo = new THREE.SphereGeometry(ballRadius, 32, 32);
+    const ballMat = new THREE.MeshStandardMaterial({
+      color: 0x00f0ff,
+      emissive: 0x003366,
+      roughness: 0.15,
+      metalness: 0.95,
+      transparent: true,
+      opacity: isTransitioning ? 0.0 : 1.0
+    });
+    ballMesh = new THREE.Mesh(ballGeo, ballMat);
+    ballMesh.castShadow = true;
+    ballMesh.receiveShadow = true;
+  }
+  mazeContainer.add(ballMesh);
+
+  // 2. Physics representation of the Ball (Dynamic sphere)
+  const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic()
+    .setTranslation(startPos.x, startPos.y, startPos.z)
+    .setLinearDamping(0.3)
+    .setAngularDamping(0.3)
+    .setCanSleep(false);
+  ballBody = physicsWorld.createRigidBody(ballBodyDesc);
+  ballBody.enableCcd(true);
+
+  const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius)
+    .setRestitution(0.05)
+    .setFriction(0.6);
+  physicsWorld.createCollider(ballColliderDesc, ballBody);
+
+  // Calculate approach direction from startPos to finishPos to dynamically face/position gates
+  const approachDir = new THREE.Vector3().subVectors(finishPos, startPos);
+  approachDir.y = 0;
+  approachDir.normalize();
+  const approachAngle = Math.atan2(approachDir.x, approachDir.z);
+
+  // 3. Spawn Football Gates behind the save item
+  if (gatesTemplate) {
+    gatesMesh = gatesTemplate.clone();
+    gatesMesh.name = 'football-gates';
+    gatesMesh.position.copy(finishPos);
+    gatesMesh.rotation.y = approachAngle; // face approach direction
+
+    // Scale gates
+    const gatesBox = getGeometryBoundingBox(gatesMesh);
+    const gatesSizeVec = new THREE.Vector3();
+    gatesBox.getSize(gatesSizeVec);
+    const maxDim = Math.max(gatesSizeVec.x, gatesSizeVec.y, gatesSizeVec.z);
+    const targetGatesSize = ballRadius * 6.5; // width about 1.6 units
+    const finalGatesScale = (maxDim > 0.0001) ? (targetGatesSize / maxDim) : 1.0;
+    gatesMesh.scale.set(finalGatesScale, finalGatesScale, finalGatesScale);
+
+    // Keep gates aligned on the level floor
+    gatesMesh.position.y = floorTopY + 0.03;
+
+    gatesMesh.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            child.material = child.material.map((mat) => {
+              const cloned = mat.clone();
+              cloned.transparent = true;
+              cloned.opacity = isTransitioning ? 0.0 : 1.0;
+              return cloned;
+            });
+          } else {
+            child.material = child.material.clone();
+            child.material.transparent = true;
+            child.material.opacity = isTransitioning ? 0.0 : 1.0;
+          }
+        }
+      }
+    });
+
+    mazeContainer.add(gatesMesh);
+  }
+
+  // 4. Spawn Save Item in front of the gates
+  if (saveTemplate) {
+    saveMesh = saveTemplate.clone();
+    saveMesh.name = 'save-item';
+
+    // Position save item in front of the gates (along -approachDir)
+    const saveOffsetDist = ballRadius * 3.5; // offset towards start
+    const saveWorldPos = finishPos.clone().addScaledVector(approachDir, -saveOffsetDist);
+    saveMesh.position.copy(saveWorldPos);
+
+    // Scale saveMesh
+    const saveBox = getGeometryBoundingBox(saveMesh);
+    const saveSizeVec = new THREE.Vector3();
+    saveBox.getSize(saveSizeVec);
+    const maxDim = Math.max(saveSizeVec.x, saveSizeVec.y, saveSizeVec.z);
+    const targetSize = ballRadius * 1.6;
+    const finalScale = (maxDim > 0.0001) ? (targetSize / maxDim) : targetSize;
+    saveMesh.scale.set(finalScale, finalScale, finalScale);
+    saveMesh.position.y += targetSize * 0.6; // lift to rest on floor
+
+    saveMesh.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.visible = true;
+        child.castShadow = true;
+        child.receiveShadow = true;
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            child.material = child.material.map((mat) => {
+              const cloned = mat.clone();
+              cloned.transparent = true;
+              cloned.opacity = isTransitioning ? 0.0 : 1.0;
+              return cloned;
+            });
+          } else {
+            child.material = child.material.clone();
+            child.material.transparent = true;
+            child.material.opacity = isTransitioning ? 0.0 : 1.0;
+          }
+        }
+      }
+    });
+
     mazeContainer.add(saveMesh);
   }
 
@@ -1407,8 +1551,6 @@ function spawnGameElements() {
   debugLog(`Finish spawned at: x=${finishPos.x.toFixed(2)}, y=${finishPos.y.toFixed(2)}, z=${finishPos.z.toFixed(2)}`);
 
   isLevelLoading = false;
-  isSaveCollectedAnimation = false;
-  saveAnimProgress = 0.0;
 
   // Expose to window for real-time console debugging
   (window as any).physicsWorld = physicsWorld;
@@ -1450,36 +1592,65 @@ function animate() {
     });
   }
 
-  // 1. Static/collected Saves animation (rotate slowly in the sky)
-  scene.traverse((child) => {
-    if (child.name === 'save-item' && child.parent === scene) {
-      child.rotation.y += (Math.PI * 2 / 3.0) * dt;
-    }
+  // 1. Static/collected Saves animation (rotate slowly in the camera space)
+  collectedSavesList.forEach((child) => {
+    child.rotation.y += (Math.PI * 2 / 4.0) * dt;
   });
 
-  // 2. Active Save Mesh Hover/Collection Animations in the level
-  if (saveMesh && saveMesh.parent === mazeContainer) {
-    if (!isSaveCollectedAnimation) {
-      // Normal rotation: 1 rotation per 2.1s -> 2.99 rad/sec (reduced 3x)
-      saveMesh.rotation.y += 2.99 * dt;
-      // Bobbing up and down slightly (sine wave over time, reduced 2x to 0.04)
-      const bobOffset = Math.sin(Date.now() * 0.003) * 0.04;
-      saveMesh.position.y = finishPos.y + 0.3 + bobOffset;
-    } else {
-      // Fly-up and scaling animation
-      saveAnimProgress = Math.min(1.0, saveAnimProgress + dt * 2.0); // 0.5s duration
-      const baseScale = ballRadius * 1.6;
-      const currentScale = baseScale * (1.0 + saveAnimProgress * 1.5);
-      saveMesh.scale.set(currentScale, currentScale, currentScale);
+  // 2. Fly-up collection animation from 3D world to Camera-HUD slots
+  if (saveAnimMesh) {
+    saveAnimTime = Math.min(SAVE_ANIM_DURATION, saveAnimTime + dt);
+    const progress = saveAnimTime / SAVE_ANIM_DURATION;
+    
+    // Smooth easeOutCubic curve
+    const t = 1.0 - Math.pow(1.0 - progress, 3);
+    
+    // Find current camera slot target in world space
+    const slotLocal = getSaveCameraSlotPos(savesCollected - 1);
+    const slotWorld = slotLocal.clone().applyMatrix4(camera.matrixWorld);
+    
+    // Lerp position
+    saveAnimMesh.position.lerpVectors(saveAnimStartWorld, slotWorld, t);
+    
+    // Spin on Y
+    saveAnimMesh.rotation.y += 5.0 * dt;
+    
+    // Shrink scale to fit HUD slot size
+    const targetSize = 0.22;
+    const saveBox = getGeometryBoundingBox(saveAnimMesh);
+    const sizeVec = new THREE.Vector3();
+    saveBox.getSize(sizeVec);
+    const maxDim = Math.max(sizeVec.x, sizeVec.y, sizeVec.z);
+    const targetScale = (maxDim > 0.0001) ? (targetSize / maxDim) : 1.0;
+    
+    const initialScale = ballRadius * 1.6;
+    const currentScale = THREE.MathUtils.lerp(initialScale, targetScale, t);
+    saveAnimMesh.scale.set(currentScale, currentScale, currentScale);
+    
+    if (progress >= 1.0) {
+      // Finished fly-up! Reparent to camera
+      scene.remove(saveAnimMesh);
       
-      const startY = saveOrigPos.y;
-      const targetY = startY + 6.0;
-      saveMesh.position.y = THREE.MathUtils.lerp(startY, targetY, saveAnimProgress);
-      saveMesh.rotation.y += 2.99 * (1.0 - saveAnimProgress) * dt;
+      const staticSave = saveAnimMesh.clone();
+      staticSave.scale.set(targetScale, targetScale, targetScale);
+      staticSave.position.copy(slotLocal);
+      staticSave.rotation.set(0.1, 0.4, 0); // static angled look
+      
+      camera.add(staticSave);
+      collectedSavesList.push(staticSave);
+      
+      saveAnimMesh = null;
     }
   }
 
-  // 3. Fade Transition Animation for level switching
+  // 3. Normal active Save Mesh Hover rotation in the level
+  if (saveMesh && saveMesh.parent === mazeContainer) {
+    saveMesh.rotation.y += 2.99 * dt;
+    const bobOffset = Math.sin(Date.now() * 0.003) * 0.04;
+    saveMesh.position.y = (floorTopY + 0.03 + (ballRadius * 1.6) * 0.6) + bobOffset;
+  }
+
+  // 4. Fade Transition Animation for level switching
   if (isTransitioning) {
     if (transitionDir === 1) {
       // Fading out
@@ -1493,8 +1664,35 @@ function animate() {
       if (floorMaterial) {
         floorMaterial.opacity = opacity;
       }
-      if (ballMesh && ballMesh.material) {
-        (ballMesh.material as THREE.Material).opacity = opacity;
+      if (ballMesh) {
+        ballMesh.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach((mat) => {
+                mat.transparent = true;
+                mat.opacity = opacity;
+              });
+            } else {
+              child.material.transparent = true;
+              child.material.opacity = opacity;
+            }
+          }
+        });
+      }
+      if (gatesMesh) {
+        gatesMesh.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach((mat) => {
+                mat.transparent = true;
+                mat.opacity = opacity;
+              });
+            } else {
+              child.material.transparent = true;
+              child.material.opacity = opacity;
+            }
+          }
+        });
       }
       if (saveMesh) {
         saveMesh.traverse((child) => {
@@ -1536,8 +1734,35 @@ function animate() {
       if (floorMaterial) {
         floorMaterial.opacity = opacity;
       }
-      if (ballMesh && ballMesh.material) {
-        (ballMesh.material as THREE.Material).opacity = opacity;
+      if (ballMesh) {
+        ballMesh.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach((mat) => {
+                mat.transparent = true;
+                mat.opacity = opacity;
+              });
+            } else {
+              child.material.transparent = true;
+              child.material.opacity = opacity;
+            }
+          }
+        });
+      }
+      if (gatesMesh) {
+        gatesMesh.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach((mat) => {
+                mat.transparent = true;
+                mat.opacity = opacity;
+              });
+            } else {
+              child.material.transparent = true;
+              child.material.opacity = opacity;
+            }
+          }
+        });
       }
       if (saveMesh) {
         saveMesh.traverse((child) => {
@@ -1688,10 +1913,23 @@ function animate() {
       resetGame();
     }
 
-    // 8. Check Win conditions (collect save item)
-    const distToFinish = new THREE.Vector3(ballPos.x, ballPos.y, ballPos.z).distanceTo(finishPos);
-    if (distToFinish < (ballRadius + finishRadius * 0.8) && isGameActive && !isTransitioning) {
-      collectSave();
+    // 8. Check Win / Collection conditions
+    const ballWorldPos = new THREE.Vector3(ballPos.x, ballPos.y, ballPos.z);
+    
+    // Save checkpoint collection check
+    if (!isSaveCollected && saveMesh) {
+      const distToSave = ballWorldPos.distanceTo(saveMesh.position);
+      if (distToSave < (ballRadius + (ballRadius * 1.6) * 0.8) && isGameActive && !isTransitioning) {
+        collectSave();
+      }
+    }
+    
+    // Gates level completion check (only after save has been collected!)
+    if (isSaveCollected) {
+      const distToGates = ballWorldPos.distanceTo(finishPos);
+      if (distToGates < (ballRadius + finishRadius * 1.5) && isGameActive && !isTransitioning) {
+        completeLevel();
+      }
     }
   }
 
