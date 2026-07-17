@@ -658,6 +658,10 @@ function showStartScreen() {
   isStartScreenActive = true;
   mazeContainer.visible = false;
   
+  if (scene) {
+    scene.background = new THREE.Color(0xC5DFFC);
+  }
+  
   const mainLight = scene.getObjectByName('main-light');
   if (mainLight) mainLight.visible = false;
   
@@ -669,6 +673,10 @@ function showStartScreen() {
 function hideStartScreen() {
   isStartScreenActive = false;
   mazeContainer.visible = true;
+  
+  if (scene) {
+    scene.background = new THREE.Color(0xffffff);
+  }
   
   const mainLight = scene.getObjectByName('main-light');
   if (mainLight) mainLight.visible = true;
