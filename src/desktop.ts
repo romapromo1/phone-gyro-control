@@ -282,7 +282,7 @@ let isLevelLoading = false; // blocks visual rotation during level loading
 let startPos = new THREE.Vector3();
 let finishPos = new THREE.Vector3();
 let finishRadius = 0.5;
-let isFirstTelemetry = true;
+let isControllerConnected = false;
 let mazeBoundingBox = new THREE.Box3();
 let mazeSize = new THREE.Vector3();
 let floorTopY = 0.0;
@@ -317,10 +317,13 @@ socket.on('connect', () => {
 });
 
 socket.on('gyro-update', (data: { beta: number; gamma: number; alpha?: number }) => {
-  if (isFirstTelemetry) {
+  isControllerConnected = true;
+
+  // If pairing overlay is visible, it means we were waiting for connection
+  if (!pairingOverlay.classList.contains('hidden')) {
     pairingOverlay.classList.add('hidden');
     hudOverlay.classList.remove('hidden');
-    isFirstTelemetry = false;
+    
     // Initialize audio context
     sounds.init();
     // Start game mode
@@ -946,9 +949,17 @@ async function init() {
   // Bind 2D Start Button Click Event
   btnStartGame.addEventListener('click', () => {
     hideStartScreen();
-    pairingOverlay.classList.remove('hidden');
     startOverlay.classList.add('hidden');
-    fetchServerInfo();
+    
+    if (isControllerConnected) {
+      pairingOverlay.classList.add('hidden');
+      hudOverlay.classList.remove('hidden');
+      sounds.init();
+      startNewGame();
+    } else {
+      pairingOverlay.classList.remove('hidden');
+      fetchServerInfo();
+    }
   });
 
   // Load the Maze asset (they just go in order from 01 to 06)
