@@ -103,10 +103,7 @@ const SAVE_ANIM_DURATION = 0.8;
 let isDebugModeActive = false;
 let defaultGatesScale = 1.0;
 
-// Start Screen Templates & Group
-let seivyTemplate: THREE.Group | null = null;
-let otYPayTemplate: THREE.Group | null = null;
-let startScreenGroup: THREE.Group | null = null;
+// Start Screen State
 let isStartScreenActive = false;
 
 let isTransitioning = false;
@@ -679,110 +676,6 @@ function getGeometryBoundingBox(object: THREE.Object3D | null): THREE.Box3 {
   return box;
 }
 
-function createCenteredAndScaledModel(fbx: THREE.Group, targetSize: number): THREE.Group {
-  const wrapper = new THREE.Group();
-  const box = getGeometryBoundingBox(fbx);
-  const size = new THREE.Vector3();
-  box.getSize(size);
-  const center = new THREE.Vector3();
-  box.getCenter(center);
-  const maxDim = Math.max(size.x, size.y, size.z);
-  const scale = (maxDim > 0.0001) ? (targetSize / maxDim) : 1.0;
-  fbx.position.set(-center.x, -center.y, -center.z);
-  wrapper.add(fbx);
-  wrapper.scale.set(scale, scale, scale);
-  return wrapper;
-}
-
-function setupStartScreen() {
-  const convertMaterialToPBR = (mat: THREE.Material) => {
-    const pbr = new THREE.MeshPhysicalMaterial({
-      color: (mat as any).color ? (mat as any).color : 0xffffff,
-      roughness: 0.15,
-      metalness: 0.85,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.1,
-      envMapIntensity: 2.2 // Boost reflections from environment map!
-    });
-    if ((mat as any).map) pbr.map = (mat as any).map;
-    return pbr;
-  };
-
-  if (!startScreenGroup) {
-    startScreenGroup = new THREE.Group();
-    startScreenGroup.name = 'start-screen-group';
-    scene.add(startScreenGroup);
-    
-    // 1. Shadow catcher plane
-    const shadowPlaneGeo = new THREE.PlaneGeometry(100, 100);
-    const shadowPlaneMat = new THREE.ShadowMaterial({ opacity: 0.15 });
-    const shadowPlane = new THREE.Mesh(shadowPlaneGeo, shadowPlaneMat);
-    shadowPlane.position.set(0, 0, -2.0);
-    shadowPlane.receiveShadow = true;
-    startScreenGroup.add(shadowPlane);
-    
-    // 2. Custom bright lights for the start screen
-    const startLight = new THREE.DirectionalLight(0xffffff, 4.0); // Boosted to 4.0
-    startLight.position.set(5, 8, 12);
-    startLight.castShadow = true;
-    startLight.shadow.mapSize.width = 2048;
-    startLight.shadow.mapSize.height = 2048;
-    startLight.shadow.bias = -0.0005;
-    startLight.shadow.camera.left = -6;
-    startLight.shadow.camera.right = 6;
-    startLight.shadow.camera.top = 8;
-    startLight.shadow.camera.bottom = -8;
-    startLight.shadow.camera.near = 0.5;
-    startLight.shadow.camera.far = 25;
-    startScreenGroup.add(startLight);
-    
-    const startAmbient = new THREE.AmbientLight(0xffffff, 1.5); // Boosted to 1.5
-    startScreenGroup.add(startAmbient);
-  }
-  
-  if (seivyTemplate && !startScreenGroup.getObjectByName('seivy-header')) {
-    const seivyModel = seivyTemplate.clone();
-    seivyModel.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-        if (child.material) {
-          if (Array.isArray(child.material)) {
-            child.material = child.material.map(convertMaterialToPBR);
-          } else {
-            child.material = convertMaterialToPBR(child.material);
-          }
-        }
-      }
-    });
-    const seivyCentered = createCenteredAndScaledModel(seivyModel, 5.5);
-    seivyCentered.name = 'seivy-header';
-    seivyCentered.position.set(0, 2.5, 0);
-    startScreenGroup.add(seivyCentered);
-  }
-  
-  if (otYPayTemplate && !startScreenGroup.getObjectByName('otypay-subheader')) {
-    const otYPayModel = otYPayTemplate.clone();
-    otYPayModel.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-        if (child.material) {
-          if (Array.isArray(child.material)) {
-            child.material = child.material.map(convertMaterialToPBR);
-          } else {
-            child.material = convertMaterialToPBR(child.material);
-          }
-        }
-      }
-    });
-    const otYPayCentered = createCenteredAndScaledModel(otYPayModel, 3.5);
-    otYPayCentered.name = 'otypay-subheader';
-    otYPayCentered.position.set(0, -1.5, 0);
-    startScreenGroup.add(otYPayCentered);
-  }
-}
-
 function getSaveCameraSlotPos(index: number): THREE.Vector3 {
   const aspect = camera ? camera.aspect : 0.56;
   const fov = camera ? camera.fov : 45;
@@ -800,12 +693,7 @@ function getSaveCameraSlotPos(index: number): THREE.Vector3 {
 function showStartScreen() {
   isStartScreenActive = true;
   mazeContainer.visible = false;
-  setupStartScreen();
-  if (startScreenGroup) {
-    startScreenGroup.visible = true;
-  }
   
-  // Hide mainLight to avoid vertical shadows on the vertical plane, but keep other studio lights active for brightness!
   const mainLight = scene.getObjectByName('main-light');
   if (mainLight) mainLight.visible = false;
   
@@ -816,10 +704,6 @@ function showStartScreen() {
 
 function hideStartScreen() {
   isStartScreenActive = false;
-  if (startScreenGroup) {
-    scene.remove(startScreenGroup);
-    startScreenGroup = null;
-  }
   mazeContainer.visible = true;
   
   const mainLight = scene.getObjectByName('main-light');
@@ -1077,39 +961,7 @@ async function init() {
     console.error('Error loading save.fbx template:', err);
   });
 
-  // Load seivy.fbx template for Start Screen
-  fbxLoader.load('/source/seivy.fbx', (fbx) => {
-    seivyTemplate = fbx;
-    seivyTemplate.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-    debugLog('Loaded seivy.fbx template successfully.');
-    if (isStartScreenActive) {
-      setupStartScreen();
-    }
-  }, undefined, (err) => {
-    console.error('Error loading seivy.fbx template:', err);
-  });
 
-  // Load ot Y-Pay.fbx template for Start Screen
-  fbxLoader.load('/source/ot Y-Pay.fbx', (fbx) => {
-    otYPayTemplate = fbx;
-    otYPayTemplate.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-    debugLog('Loaded ot Y-Pay.fbx template successfully.');
-    if (isStartScreenActive) {
-      setupStartScreen();
-    }
-  }, undefined, (err) => {
-    console.error('Error loading ot Y-Pay.fbx template:', err);
-  });
 
   // Load football.glb template
   const gltfLoader = new GLTFLoader();
@@ -1750,19 +1602,7 @@ function animate() {
 
   const dt = clock.getDelta();
 
-  // Start Screen Floating Text Animations
-  if (isStartScreenActive && startScreenGroup) {
-    startScreenGroup.children.forEach((child) => {
-      if (child instanceof THREE.Group) {
-        // Absolute non-cumulative bobbing around the target coordinate
-        const originalY = child.name === 'seivy-header' ? 2.5 : -1.5;
-        const offset = Math.sin(Date.now() * 0.002 + originalY * 5.0) * 0.08;
-        child.position.y = originalY + offset;
-        // Subtle tilt oscillation
-        child.rotation.y = Math.sin(Date.now() * 0.0015 + originalY * 3.0) * 0.06;
-      }
-    });
-  }
+
 
   // 1. Static/collected Saves animation (rotate slowly in the camera space)
   collectedSavesList.forEach((child) => {
