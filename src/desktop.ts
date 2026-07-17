@@ -386,7 +386,7 @@ btnNextLevel?.addEventListener('click', () => {
 function switchMaze(newIndex: number) {
   if (newIndex === currentMazeIndex) return;
   currentMazeIndex = newIndex;
-  currentLevelSpan.textContent = String(currentMazeIndex + 2).padStart(2, '0');
+  currentLevelSpan.textContent = String(currentMazeIndex + 1).padStart(2, '0');
   debugLog(`Switching to maze ${currentMazeIndex + 1}: ${MAZE_FILES[currentMazeIndex]}`);
 
   // 1. Remove old ball body and mesh
@@ -738,9 +738,6 @@ function initDebugControls() {
 
   debugLevelSelect.addEventListener('change', () => {
     const nextIndex = parseInt(debugLevelSelect.value);
-    currentMazeIndex = nextIndex;
-    currentLevelSpan.textContent = String(currentMazeIndex + 1).padStart(2, '0');
-    
     // Switch level
     isLevelLoading = true;
     switchMaze(nextIndex);
