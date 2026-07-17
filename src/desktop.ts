@@ -79,6 +79,7 @@ let gameTimerInterval: any = null;
 // Transition and save object state
 let saveTemplate: THREE.Group | null = null;
 let saveMesh: THREE.Group | null = null;
+const customSaveCoordinates: { [key: number]: { x: number, z: number } } = {};
 
 // Football and Gates Templates & State
 let footballTemplate: THREE.Group | null = null;
@@ -752,6 +753,12 @@ function initDebugControls() {
     saveMesh.position.x = sx;
     saveMesh.position.z = sz;
     
+    // Cache the custom coordinates for the current level index
+    customSaveCoordinates[currentMazeIndex] = {
+      x: parseFloat(sx.toFixed(3)),
+      z: parseFloat(sz.toFixed(3))
+    };
+    
     // Update labels
     valSaveX.textContent = sx.toFixed(2);
     valSaveZ.textContent = sz.toFixed(2);
@@ -782,7 +789,7 @@ function syncDebugSlidersFromScene() {
 function updateDebugOutputText() {
   if (!saveMesh) return;
   
-  const data = {
+  const currentData = {
     levelIndex: currentMazeIndex,
     levelName: MAZE_FILES[currentMazeIndex].split('/').pop(),
     save: {
@@ -791,7 +798,13 @@ function updateDebugOutputText() {
       z: parseFloat(saveMesh.position.z.toFixed(3))
     }
   };
-  debugOutput.value = JSON.stringify(data, null, 2);
+  
+  const combined = {
+    currentLevel: currentData,
+    allCustomizedSession: customSaveCoordinates
+  };
+  
+  debugOutput.value = JSON.stringify(combined, null, 2);
 }
 
 // Initialize Graphics & Physics
@@ -1379,7 +1392,15 @@ function spawnGameElements() {
   if (saveTemplate) {
     saveMesh = saveTemplate.clone();
     saveMesh.name = 'save-item';
-    saveMesh.position.copy(finishPos);
+    if (customSaveCoordinates[currentMazeIndex]) {
+      saveMesh.position.set(
+        customSaveCoordinates[currentMazeIndex].x,
+        finishPos.y,
+        customSaveCoordinates[currentMazeIndex].z
+      );
+    } else {
+      saveMesh.position.copy(finishPos);
+    }
 
     // Scale saveMesh
     const saveBox = getGeometryBoundingBox(saveMesh);
