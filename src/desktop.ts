@@ -1287,6 +1287,7 @@ function buildPhysicsMaze() {
 }
 
 function spawnGameElements() {
+  isSaveCollected = false;
   const maxDim = Math.max(mazeSize.x, mazeSize.z);
   // Doubled ball radius multiplier to 0.024 for the fixed maps
   ballRadius = maxDim * 0.024; 
