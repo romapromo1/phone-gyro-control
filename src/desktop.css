@@ -616,6 +616,7 @@
 
 /* Debug Mode CSS Styles */
 .debug-toggle-btn {
+  display: none; /* Hidden by default in production */
   position: absolute;
   top: 15px;
   left: 15px;

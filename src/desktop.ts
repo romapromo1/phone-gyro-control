@@ -686,6 +686,13 @@ function hideStartScreen() {
 }
 
 function initDebugControls() {
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.has('debug')) {
+    btnDebugToggle.style.display = 'block';
+  } else {
+    btnDebugToggle.style.display = 'none';
+  }
+
   btnDebugToggle.addEventListener('click', () => {
     isDebugModeActive = !isDebugModeActive;
     if (isDebugModeActive) {
