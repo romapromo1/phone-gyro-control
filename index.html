@@ -132,40 +132,7 @@
     </div>
   </div>
   
-    <!-- Debug Mode Trigger -->
-    <button id="btn-debug-toggle" class="debug-toggle-btn">🔧 ОТЛАДКА</button>
 
-    <!-- Debug Panel Overlay -->
-    <div id="debug-panel" class="debug-panel hidden">
-      <div class="glass-panel debug-content">
-        <h3>Режим отладки</h3>
-        
-        <div class="debug-field">
-          <label>Выбрать Лабиринт:</label>
-          <select id="debug-level-select">
-            <option value="0">Лабиринт 1 (labirint2)</option>
-            <option value="1">Лабиринт 2 (labirint3)</option>
-            <option value="2">Лабиринт 3 (labirint5)</option>
-            <option value="3">Лабиринт 4 (labirint7)</option>
-          </select>
-        </div>
-
-
-
-        <div class="debug-group-title">Сейв (Save Checkpoint)</div>
-        <div class="debug-field">
-          <label>Позиция X: <span id="val-save-x">0.00</span></label>
-          <input type="range" id="slider-save-x" min="-25" max="25" step="0.05" value="0" />
-        </div>
-        <div class="debug-field">
-          <label>Позиция Z: <span id="val-save-z">0.00</span></label>
-          <input type="range" id="slider-save-z" min="-25" max="25" step="0.05" value="0" />
-        </div>
-
-        <div class="debug-group-title">Координаты для коммита:</div>
-        <textarea id="debug-output" readonly rows="5"></textarea>
-      </div>
-    </div>
 
     <script type="module" src="/src/desktop.ts"></script>
 </body>

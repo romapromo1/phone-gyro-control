@@ -36,18 +36,7 @@ const modalSubtitle = document.getElementById('modal-subtitle') as HTMLElement;
 const startOverlay = document.getElementById('start-overlay') as HTMLElement;
 const btnStartGame = document.getElementById('btn-start-game') as HTMLButtonElement;
 
-// Debug UI elements
-const btnDebugToggle = document.getElementById('btn-debug-toggle') as HTMLButtonElement;
-const debugPanel = document.getElementById('debug-panel') as HTMLElement;
-const debugLevelSelect = document.getElementById('debug-level-select') as HTMLSelectElement;
 
-const sliderSaveX = document.getElementById('slider-save-x') as HTMLInputElement;
-const sliderSaveZ = document.getElementById('slider-save-z') as HTMLInputElement;
-
-const valSaveX = document.getElementById('val-save-x') as HTMLElement;
-const valSaveZ = document.getElementById('val-save-z') as HTMLElement;
-
-const debugOutput = document.getElementById('debug-output') as HTMLTextAreaElement;
 
 // Maze level management (Level 2 to Level 7 from /new/)
 const MAZE_FILES = [
@@ -80,7 +69,7 @@ const customSaveCoordinates: { [key: number]: { x: number, z: number } } = {};
 // Football and Gates Templates & State
 let footballTemplate: THREE.Group | null = null;
 let isSaveCollected = false;
-let isDebugModeActive = false;
+
 
 // Start Screen State
 let isStartScreenActive = false;
@@ -685,117 +674,7 @@ function hideStartScreen() {
   if (mainLight) mainLight.visible = true;
 }
 
-function initDebugControls() {
-  const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.has('debug')) {
-    btnDebugToggle.style.display = 'block';
-  } else {
-    btnDebugToggle.style.display = 'none';
-  }
 
-  btnDebugToggle.addEventListener('click', () => {
-    isDebugModeActive = !isDebugModeActive;
-    if (isDebugModeActive) {
-      debugPanel.classList.remove('hidden');
-      btnDebugToggle.textContent = '❌ ВЫЙТИ ИЗ ОТЛАДКИ';
-      btnDebugToggle.style.borderColor = 'red';
-      btnDebugToggle.style.color = 'red';
-      
-      // Stop gameplay
-      isGameActive = false;
-      
-      // Set select values
-      debugLevelSelect.value = String(currentMazeIndex);
-      
-      // Sync sliders
-      syncDebugSlidersFromScene();
-      
-      // Top down camera look
-      camera.position.set(0, 30, 0);
-      camera.lookAt(0, 0, 0);
-      camera.up.set(0, 0, -1);
-    } else {
-      debugPanel.classList.add('hidden');
-      btnDebugToggle.textContent = '🔧 ОТЛАДКА';
-      btnDebugToggle.style.borderColor = 'var(--accent-cyan)';
-      btnDebugToggle.style.color = 'var(--accent-cyan)';
-      
-      // Resume game
-      isGameActive = true;
-      positionCamera();
-    }
-  });
-
-  debugLevelSelect.addEventListener('change', () => {
-    const nextIndex = parseInt(debugLevelSelect.value);
-    // Switch level
-    isLevelLoading = true;
-    switchMaze(nextIndex);
-  });
-
-  const onSliderChange = () => {
-    if (!saveMesh) return;
-    
-    const sx = parseFloat(sliderSaveX.value);
-    const sz = parseFloat(sliderSaveZ.value);
-    
-    // Update Save
-    saveMesh.position.x = sx;
-    saveMesh.position.z = sz;
-    
-    // Cache the custom coordinates for the current level index
-    customSaveCoordinates[currentMazeIndex] = {
-      x: parseFloat(sx.toFixed(3)),
-      z: parseFloat(sz.toFixed(3))
-    };
-    
-    // Update labels
-    valSaveX.textContent = sx.toFixed(2);
-    valSaveZ.textContent = sz.toFixed(2);
-    
-    // Update output text
-    updateDebugOutputText();
-  };
-
-  const sliders = [sliderSaveX, sliderSaveZ];
-  sliders.forEach(s => {
-    s.addEventListener('input', onSliderChange);
-  });
-}
-
-function syncDebugSlidersFromScene() {
-  if (!saveMesh) return;
-  
-  sliderSaveX.value = String(saveMesh.position.x);
-  sliderSaveZ.value = String(saveMesh.position.z);
-  
-  // Set text labels
-  valSaveX.textContent = saveMesh.position.x.toFixed(2);
-  valSaveZ.textContent = saveMesh.position.z.toFixed(2);
-  
-  updateDebugOutputText();
-}
-
-function updateDebugOutputText() {
-  if (!saveMesh) return;
-  
-  const currentData = {
-    levelIndex: currentMazeIndex,
-    levelName: MAZE_FILES[currentMazeIndex].split('/').pop(),
-    save: {
-      x: parseFloat(saveMesh.position.x.toFixed(3)),
-      y: parseFloat(saveMesh.position.y.toFixed(3)),
-      z: parseFloat(saveMesh.position.z.toFixed(3))
-    }
-  };
-  
-  const combined = {
-    currentLevel: currentData,
-    allCustomizedSession: customSaveCoordinates
-  };
-  
-  debugOutput.value = JSON.stringify(combined, null, 2);
-}
 
 // Initialize Graphics & Physics
 async function init() {
@@ -953,8 +832,7 @@ async function init() {
   currentLevelSpan.textContent = String(currentMazeIndex + 1).padStart(2, '0');
   loadMazeAsset();
 
-  // Initialize Debug Controls
-  initDebugControls();
+
 
   // Show Start Screen immediately on launch
   showStartScreen();
@@ -1462,9 +1340,7 @@ function spawnGameElements() {
 
   isLevelLoading = false;
 
-  if (isDebugModeActive) {
-    syncDebugSlidersFromScene();
-  }
+
 
   // Expose to window for real-time console debugging
   (window as any).physicsWorld = physicsWorld;
@@ -1483,10 +1359,6 @@ function onWindowResize() {
     camera.position.set(0, 0.5, 10);
     camera.lookAt(0, 0.5, 0);
     camera.up.set(0, 1, 0);
-  } else if (isDebugModeActive) {
-    camera.position.set(0, 30, 0);
-    camera.lookAt(0, 0, 0);
-    camera.up.set(0, 0, -1);
   } else {
     positionCamera();
   }
