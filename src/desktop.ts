@@ -1005,7 +1005,7 @@ function updateCameraPosition() {
   const angleRad = cameraAngleDeg * Math.PI / 180;
   
   // Adjust distance for vertical screens (aspect < 1.0) so maze fits horizontally
-  let camDistance = distance * 1.5;
+  let camDistance = distance * 1.9;
   if (camera.aspect < 1.0) {
     camDistance = camDistance / camera.aspect;
   }
