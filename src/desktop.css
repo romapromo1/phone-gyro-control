@@ -275,9 +275,9 @@
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  color: var(--text-primary);
+  background: #C5DFFC;
+  border: 2px solid #DDFF68;
+  color: #000000;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -292,9 +292,9 @@
 }
 
 .settings-btn:hover {
-  color: var(--accent-cyan);
-  border-color: var(--accent-cyan);
-  box-shadow: var(--glow-shadow);
+  color: #000000;
+  border-color: #DDFF68;
+  box-shadow: 0 0 15px rgba(221, 255, 104, 0.6);
 }
 
 .settings-btn svg {
@@ -528,9 +528,9 @@
 }
 
 .hud-restart-btn {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  color: var(--text-primary);
+  background: #C5DFFC;
+  border: 2px solid #DDFF68;
+  color: #000000;
   font-weight: 700;
   font-size: 11px;
   letter-spacing: 1px;
@@ -543,10 +543,10 @@
 }
 
 .hud-restart-btn:hover {
-  background: var(--accent-magenta);
-  color: white;
-  border-color: var(--accent-magenta);
-  box-shadow: var(--glow-shadow-pink);
+  background: #C5DFFC;
+  color: #000000;
+  border-color: #DDFF68;
+  box-shadow: 0 0 15px rgba(221, 255, 104, 0.6);
   transform: translateY(-1px);
 }
 
@@ -594,19 +594,20 @@
   font-size: 28px;
   font-weight: 800;
   border-radius: 40px;
-  background: white;
-  border: 3px solid var(--accent-cyan);
-  color: var(--accent-cyan);
-  box-shadow: 0 8px 30px rgba(0, 102, 204, 0.2);
+  background: #C5DFFC;
+  border: 3px solid #DDFF68;
+  color: #000000;
+  box-shadow: 0 8px 30px rgba(221, 255, 104, 0.2);
   transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
   pointer-events: auto;
   cursor: pointer;
 }
 
 .start-btn:hover {
-  background: var(--accent-cyan);
-  color: white;
-  box-shadow: 0 12px 40px rgba(0, 102, 204, 0.4);
+  background: #C5DFFC;
+  color: #000000;
+  border-color: #DDFF68;
+  box-shadow: 0 12px 40px rgba(221, 255, 104, 0.5);
   transform: translateY(-2px);
 }
 

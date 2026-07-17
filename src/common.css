@@ -44,26 +44,27 @@ body {
 }
 
 .glow-btn {
-  background: transparent;
-  border: 2px solid var(--accent-cyan);
-  color: var(--accent-cyan);
+  background: #C5DFFC;
+  border: 2px solid #DDFF68;
+  color: #000000;
   padding: 12px 28px;
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 700;
   border-radius: 30px;
   cursor: pointer;
   transition: all 0.3s ease;
   font-family: 'Outfit', sans-serif;
   text-transform: uppercase;
   letter-spacing: 2px;
-  box-shadow: var(--glow-shadow);
+  box-shadow: 0 0 15px rgba(221, 255, 104, 0.3);
   outline: none;
 }
 
 .glow-btn:hover {
-  background: var(--accent-cyan);
-  color: #000;
-  box-shadow: 0 0 30px var(--accent-cyan);
+  background: #C5DFFC;
+  color: #000000;
+  border-color: #DDFF68;
+  box-shadow: 0 0 25px rgba(221, 255, 104, 0.7);
 }
 
 .glow-btn:active {
