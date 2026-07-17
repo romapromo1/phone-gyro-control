@@ -61,7 +61,7 @@ body {
 }
 
 .glow-btn:hover {
-  background: #C5DFFC;
+  background: #ffffff;
   color: #716CFF;
   border-color: #716CFF;
   box-shadow: 0 0 25px rgba(113, 108, 255, 0.6);
