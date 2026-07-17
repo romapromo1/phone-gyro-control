@@ -58,13 +58,13 @@ const MAZE_FILES = [
   '/source/fixed/labirint6.fbx',
   '/source/fixed/labirint7.fbx'
 ];
-const BLENDER_FINISH_COORDS = [
-  { x: -8.809,   y: 1.8372,   z: 0.0 }, // Лабиринт 2 (индекс 0)
-  { x: 16.063,   y: 1.8372,   z: 0.0 }, // Лабиринт 3 (индекс 1)
-  { x: -12.483,  y: -12.53,   z: 0.0 }, // Лабиринт 4 (индекс 2)
-  { x: 8.856,    y: 1.7429,   z: 0.0 }, // Лабиринт 5 (индекс 3)
-  { x: 1.67227,  y: 1.82146,  z: 0.0 }, // Лабиринт 6 (индекс 4)
-  { x: -12.53,   y: -12.436,  z: 0.0 }  // Лабиринт 7 (индекс 5)
+const DEFAULT_SAVE_COORDS = [
+  { x: 5.3,   z: 1.8 },   // Лабиринт 2 (индекс 0)
+  { x: -2.95, z: -2.95 }, // Лабиринт 3 (индекс 1)
+  { x: -1.8,  z: 1.8 },   // Лабиринт 4 (индекс 2)
+  { x: 2.9,   z: -0.55 }, // Лабиринт 5 (индекс 3)
+  { x: 1.8,   z: 5.3 },   // Лабиринт 6 (индекс 4)
+  { x: 4.15,  z: -1.8 }   // Лабиринт 7 (индекс 5)
 ];
 let currentMazeIndex = 0;
 let isAnimating = false; // prevent calling animate() multiple times
@@ -1312,19 +1312,10 @@ function spawnGameElements() {
     mazeBoundingBox.min.z + 1.0
   );
 
-  // Position finish Golden Save template using coordinates from Blender
-  const finishCoord = BLENDER_FINISH_COORDS[currentMazeIndex];
-  if (finishCoord && mazeGroup) {
-    // Convert Blender axes (Z-up) to Three.js axes (Y-up):
-    // Blender X -> Three.js X
-    // Blender Z -> Three.js Y (height)
-    // Blender Y -> Three.js Z (depth)
-    finishPos.set(finishCoord.x, finishCoord.z, finishCoord.y);
-    // Apply local-to-world matrix of the centered and scaled maze Group
-    finishPos.applyMatrix4(mazeGroup.matrixWorld);
-    
-    // Safety check: ensure finishPos is resting cleanly on the smooth floor
-    finishPos.y = Math.max(finishPos.y, floorTopY + 0.03 + 0.1);
+  // Position finish Golden Save template using the custom default coordinates
+  const finishCoord = DEFAULT_SAVE_COORDS[currentMazeIndex];
+  if (finishCoord) {
+    finishPos.set(finishCoord.x, floorTopY + 0.03 + 0.1, finishCoord.z);
   } else {
     // Fallback: Position finish Golden Save template at the opposite end of the labyrinth from start (on the smooth floor)
     finishPos.set(
