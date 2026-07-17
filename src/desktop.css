@@ -292,10 +292,10 @@
 }
 
 .settings-btn:hover {
-  background: #DDFF68;
-  color: #080245;
-  border-color: #080245;
-  box-shadow: 0 0 15px rgba(8, 2, 69, 0.3);
+  color: #DDFF68;
+  border-color: #DDFF68;
+  background: #080245;
+  box-shadow: 0 0 15px rgba(221, 255, 104, 0.6);
 }
 
 .settings-btn svg {
@@ -544,10 +544,10 @@
 }
 
 .hud-restart-btn:hover {
-  background: #DDFF68;
-  color: #080245;
-  border-color: #080245;
-  box-shadow: 0 0 15px rgba(8, 2, 69, 0.3);
+  background: #080245;
+  color: #DDFF68;
+  border-color: #DDFF68;
+  box-shadow: 0 0 15px rgba(221, 255, 104, 0.6);
   transform: translateY(-1px);
 }
 
@@ -605,10 +605,10 @@
 }
 
 .start-btn:hover {
-  background: #DDFF68;
-  color: #080245;
-  border-color: #080245;
-  box-shadow: 0 12px 40px rgba(8, 2, 69, 0.3);
+  background: #080245;
+  color: #DDFF68;
+  border-color: #DDFF68;
+  box-shadow: 0 12px 40px rgba(221, 255, 104, 0.5);
   transform: translateY(-2px);
 }
 
