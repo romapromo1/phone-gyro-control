@@ -27,7 +27,7 @@ const btnNextLevel = document.getElementById('btn-next-level') as HTMLButtonElem
 
 // New HUD elements Binds
 const timerSpan = document.getElementById('game-timer') as HTMLElement;
-const savesSpan = document.getElementById('saves-count') as HTMLElement;
+
 const btnHudRestart = document.getElementById('btn-hud-restart') as HTMLButtonElement;
 const modalTitle = document.getElementById('modal-title') as HTMLElement;
 const modalSubtitle = document.getElementById('modal-subtitle') as HTMLElement;
@@ -84,11 +84,6 @@ const customSaveCoordinates: { [key: number]: { x: number, z: number } } = {};
 // Football and Gates Templates & State
 let footballTemplate: THREE.Group | null = null;
 let isSaveCollected = false;
-let collectedSavesList: THREE.Object3D[] = [];
-let saveAnimMesh: THREE.Group | null = null;
-let saveAnimStartWorld = new THREE.Vector3();
-let saveAnimTime = 0.0;
-const SAVE_ANIM_DURATION = 0.8;
 let isDebugModeActive = false;
 
 // Start Screen State
@@ -534,21 +529,16 @@ function startNewGame() {
   const oldFloor = mazeContainer.getObjectByName('floor-mesh');
   if (oldFloor) mazeContainer.remove(oldFloor);
 
-  if (savesSpan) {
-    savesSpan.textContent = `0 / ${totalSavesGoal}`;
-  }
+  // Reset graphic HUD
+  updateSavesHUD();
+  
   isGameActive = true;
   if (victoryOverlay) {
     victoryOverlay.classList.add('hidden');
   }
   
-  // Clear any static saves from the camera-HUD
-  collectedSavesList.forEach(s => camera.remove(s));
-  collectedSavesList = [];
-
   // Reset states
   isSaveCollected = false;
-  saveAnimMesh = null;
   const oldGates = mazeContainer.getObjectByName('football-gates');
   if (oldGates) mazeContainer.remove(oldGates);
   
@@ -567,31 +557,40 @@ function startNewGame() {
   startTimer();
 }
 
+function updateSavesHUD() {
+  const container = document.getElementById('saves-icons');
+  if (!container) return;
+  
+  container.innerHTML = '';
+  for (let i = 0; i < totalSavesGoal; i++) {
+    const slot = document.createElement('div');
+    slot.className = `save-icon-slot ${i < savesCollected ? 'collected' : ''}`;
+    slot.innerHTML = `
+      <svg class="save-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+        <polyline points="17 21 17 13 7 13 7 21"></polyline>
+        <polyline points="7 3 7 8 15 8"></polyline>
+      </svg>
+    `;
+    container.appendChild(slot);
+  }
+}
+
 function collectSave() {
   if (isTransitioning || !isGameActive || isSaveCollected || !saveMesh) return;
   
   isSaveCollected = true;
   savesCollected++;
-  if (savesSpan) {
-    savesSpan.textContent = `${savesCollected} / ${totalSavesGoal}`;
-  }
+  
   sounds.playVictory();
   
-  // Start the fly-up animation to camera slot
-  const worldPos = new THREE.Vector3();
-  saveMesh.getWorldPosition(worldPos);
-  
-  saveAnimMesh = saveMesh;
-  saveAnimMesh.position.copy(worldPos);
-  
-  // Reparent to scene so it does not tilt with the maze container
+  // Remove save mesh from mazeContainer instantly
   mazeContainer.remove(saveMesh);
-  scene.add(saveAnimMesh);
-  
   saveMesh = null;
-  saveAnimStartWorld.copy(worldPos);
-  saveAnimTime = 0.0;
-
+  
+  // Update graphic HUD
+  updateSavesHUD();
+  
   // Save collected -> transition to next level immediately!
   completeLevel();
 }
@@ -668,19 +667,7 @@ function getGeometryBoundingBox(object: THREE.Object3D | null): THREE.Box3 {
   return box;
 }
 
-function getSaveCameraSlotPos(index: number): THREE.Vector3 {
-  const aspect = camera ? camera.aspect : 0.56;
-  const fov = camera ? camera.fov : 45;
-  const vHeight = 2.0 * Math.tan(fov * Math.PI / 360) * 4.0;
-  const vWidth = vHeight * aspect;
-  
-  // Position slots in camera local coordinates (top right, slightly offset)
-  const slotX = vWidth * 0.44 - index * 0.28;
-  const slotY = vHeight * 0.42;
-  const slotZ = -4.0; // 4.0 units in front of camera
-  
-  return new THREE.Vector3(slotX, slotY, slotZ);
-}
+
 
 function showStartScreen() {
   isStartScreenActive = true;
@@ -1509,56 +1496,7 @@ function animate() {
 
 
 
-  // 1. Static/collected Saves animation (rotate slowly in the camera space)
-  collectedSavesList.forEach((child) => {
-    child.rotation.y += (Math.PI * 2 / 4.0) * dt;
-  });
 
-  // 2. Fly-up collection animation from 3D world to Camera-HUD slots
-  if (saveAnimMesh) {
-    saveAnimTime = Math.min(SAVE_ANIM_DURATION, saveAnimTime + dt);
-    const progress = saveAnimTime / SAVE_ANIM_DURATION;
-    
-    // Smooth easeOutCubic curve
-    const t = 1.0 - Math.pow(1.0 - progress, 3);
-    
-    // Find current camera slot target in world space
-    const slotLocal = getSaveCameraSlotPos(savesCollected - 1);
-    const slotWorld = slotLocal.clone().applyMatrix4(camera.matrixWorld);
-    
-    // Lerp position
-    saveAnimMesh.position.lerpVectors(saveAnimStartWorld, slotWorld, t);
-    
-    // Spin on Y
-    saveAnimMesh.rotation.y += 5.0 * dt;
-    
-    // Shrink scale to fit HUD slot size
-    const targetSize = 0.22;
-    const saveBox = getGeometryBoundingBox(saveAnimMesh);
-    const sizeVec = new THREE.Vector3();
-    saveBox.getSize(sizeVec);
-    const maxDim = Math.max(sizeVec.x, sizeVec.y, sizeVec.z);
-    const targetScale = (maxDim > 0.0001) ? (targetSize / maxDim) : 1.0;
-    
-    const initialScale = ballRadius * 1.6;
-    const currentScale = THREE.MathUtils.lerp(initialScale, targetScale, t);
-    saveAnimMesh.scale.set(currentScale, currentScale, currentScale);
-    
-    if (progress >= 1.0) {
-      // Finished fly-up! Reparent to camera
-      scene.remove(saveAnimMesh);
-      
-      const staticSave = saveAnimMesh.clone();
-      staticSave.scale.set(targetScale, targetScale, targetScale);
-      staticSave.position.copy(slotLocal);
-      staticSave.rotation.set(0.1, 0.4, 0); // static angled look
-      
-      camera.add(staticSave);
-      collectedSavesList.push(staticSave);
-      
-      saveAnimMesh = null;
-    }
-  }
 
   // 3. Normal active Save Mesh Hover rotation in the level
   if (saveMesh && saveMesh.parent === mazeContainer) {
@@ -1837,7 +1775,10 @@ function animate() {
     
     // Save checkpoint collection check
     if (!isSaveCollected && saveMesh) {
-      const distToSave = ballWorldPos.distanceTo(saveMesh.position);
+      const ballPosXZ = new THREE.Vector2(ballWorldPos.x, ballWorldPos.z);
+      const savePosXZ = new THREE.Vector2(saveMesh.position.x, saveMesh.position.z);
+      const distToSave = ballPosXZ.distanceTo(savePosXZ);
+      
       if (distToSave < (ballRadius + (ballRadius * 1.6) * 0.8) && isGameActive && !isTransitioning) {
         collectSave();
       }

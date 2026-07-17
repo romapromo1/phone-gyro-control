@@ -699,3 +699,29 @@
   resize: none;
   outline: none;
 }
+
+/* Graphic HUD Save Slots */
+.saves-icons-list {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
+.save-icon-slot {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.15);
+  transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+.save-icon-slot.collected {
+  color: var(--accent-cyan);
+  filter: drop-shadow(0 0 5px var(--accent-cyan)) drop-shadow(0 0 10px var(--accent-cyan));
+  transform: scale(1.15);
+}
+.save-icon-svg {
+  width: 100%;
+  height: 100%;
+}
