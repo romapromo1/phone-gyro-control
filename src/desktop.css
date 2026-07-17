@@ -292,7 +292,7 @@
 }
 
 .settings-btn:hover {
-  color: #080245;
+  color: #716CFF;
   border-color: #DDFF68;
   background: #DDFF68;
   box-shadow: 0 0 15px rgba(221, 255, 104, 0.6);
@@ -545,7 +545,7 @@
 
 .hud-restart-btn:hover {
   background: #DDFF68;
-  color: #080245;
+  color: #716CFF;
   border-color: #DDFF68;
   box-shadow: 0 0 15px rgba(221, 255, 104, 0.6);
   transform: translateY(-1px);
@@ -616,7 +616,7 @@
 
 .start-btn:hover {
   background: #DDFF68;
-  color: #080245;
+  color: #716CFF;
   border-color: #DDFF68;
   box-shadow: 0 1.5vh 4vh rgba(221, 255, 104, 0.5);
   transform: translateY(-0.3vh);
