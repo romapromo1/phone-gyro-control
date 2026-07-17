@@ -221,10 +221,6 @@ const sounds = new SoundManager();
 // Resume/initialize AudioContext on any user gesture to satisfy browser autoplay policies
 function handleUserGesture() {
   sounds.init();
-  const promptEl = document.getElementById('audio-prompt');
-  if (promptEl) {
-    promptEl.classList.add('hidden');
-  }
 }
 window.addEventListener('click', handleUserGesture);
 window.addEventListener('keydown', handleUserGesture);
@@ -305,12 +301,12 @@ socket.on('connect', () => {
 socket.on('gyro-update', (data: { beta: number; gamma: number; alpha?: number }) => {
   if (isFirstTelemetry) {
     pairingOverlay.classList.add('hidden');
-    startOverlay.classList.remove('hidden');
+    hudOverlay.classList.remove('hidden');
     isFirstTelemetry = false;
     // Initialize audio context
     sounds.init();
-    // Show start screen mode
-    showStartScreen();
+    // Start game mode
+    startNewGame();
   }
 
   // Save raw normalized sensor telemetry (-1.0 to 1.0)
@@ -657,60 +653,92 @@ function createCenteredAndScaledModel(fbx: THREE.Group, targetSize: number): THR
 }
 
 function setupStartScreen() {
-  if (startScreenGroup) return;
-  startScreenGroup = new THREE.Group();
-  startScreenGroup.name = 'start-screen-group';
+  const convertMaterialToPBR = (mat: THREE.Material) => {
+    const pbr = new THREE.MeshPhysicalMaterial({
+      color: (mat as any).color ? (mat as any).color : 0xffffff,
+      roughness: 0.15,
+      metalness: 0.85,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.1,
+      envMapIntensity: 2.2 // Boost reflections from environment map!
+    });
+    if ((mat as any).map) pbr.map = (mat as any).map;
+    return pbr;
+  };
+
+  if (!startScreenGroup) {
+    startScreenGroup = new THREE.Group();
+    startScreenGroup.name = 'start-screen-group';
+    scene.add(startScreenGroup);
+    
+    // 1. Shadow catcher plane
+    const shadowPlaneGeo = new THREE.PlaneGeometry(100, 100);
+    const shadowPlaneMat = new THREE.ShadowMaterial({ opacity: 0.15 });
+    const shadowPlane = new THREE.Mesh(shadowPlaneGeo, shadowPlaneMat);
+    shadowPlane.position.set(0, 0, -2.0);
+    shadowPlane.receiveShadow = true;
+    startScreenGroup.add(shadowPlane);
+    
+    // 2. Custom bright lights for the start screen
+    const startLight = new THREE.DirectionalLight(0xffffff, 4.0); // Boosted to 4.0
+    startLight.position.set(5, 8, 12);
+    startLight.castShadow = true;
+    startLight.shadow.mapSize.width = 2048;
+    startLight.shadow.mapSize.height = 2048;
+    startLight.shadow.bias = -0.0005;
+    startLight.shadow.camera.left = -6;
+    startLight.shadow.camera.right = 6;
+    startLight.shadow.camera.top = 8;
+    startLight.shadow.camera.bottom = -8;
+    startLight.shadow.camera.near = 0.5;
+    startLight.shadow.camera.far = 25;
+    startScreenGroup.add(startLight);
+    
+    const startAmbient = new THREE.AmbientLight(0xffffff, 1.5); // Boosted to 1.5
+    startScreenGroup.add(startAmbient);
+  }
   
-  const shadowPlaneGeo = new THREE.PlaneGeometry(100, 100);
-  const shadowPlaneMat = new THREE.ShadowMaterial({ opacity: 0.15 });
-  const shadowPlane = new THREE.Mesh(shadowPlaneGeo, shadowPlaneMat);
-  shadowPlane.position.set(0, 0, -2.0);
-  shadowPlane.receiveShadow = true;
-  startScreenGroup.add(shadowPlane);
-  
-  const startLight = new THREE.DirectionalLight(0xffffff, 2.5);
-  startLight.position.set(5, 8, 12);
-  startLight.castShadow = true;
-  startLight.shadow.mapSize.width = 2048;
-  startLight.shadow.mapSize.height = 2048;
-  startLight.shadow.bias = -0.0005;
-  startLight.shadow.camera.left = -6;
-  startLight.shadow.camera.right = 6;
-  startLight.shadow.camera.top = 8;
-  startLight.shadow.camera.bottom = -8;
-  startLight.shadow.camera.near = 0.5;
-  startLight.shadow.camera.far = 25;
-  startScreenGroup.add(startLight);
-  
-  const startAmbient = new THREE.AmbientLight(0xffffff, 0.9);
-  startScreenGroup.add(startAmbient);
-  
-  if (seivyTemplate) {
+  if (seivyTemplate && !startScreenGroup.getObjectByName('seivy-header')) {
     const seivyModel = seivyTemplate.clone();
     seivyModel.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.castShadow = true;
         child.receiveShadow = true;
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            child.material = child.material.map(convertMaterialToPBR);
+          } else {
+            child.material = convertMaterialToPBR(child.material);
+          }
+        }
       }
     });
     const seivyCentered = createCenteredAndScaledModel(seivyModel, 5.5);
+    seivyCentered.name = 'seivy-header';
     seivyCentered.position.set(0, 2.5, 0);
     startScreenGroup.add(seivyCentered);
   }
   
-  if (otYPayTemplate) {
+  if (otYPayTemplate && !startScreenGroup.getObjectByName('otypay-subheader')) {
     const otYPayModel = otYPayTemplate.clone();
     otYPayModel.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.castShadow = true;
         child.receiveShadow = true;
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            child.material = child.material.map(convertMaterialToPBR);
+          } else {
+            child.material = convertMaterialToPBR(child.material);
+          }
+        }
       }
     });
     const otYPayCentered = createCenteredAndScaledModel(otYPayModel, 3.5);
+    otYPayCentered.name = 'otypay-subheader';
     otYPayCentered.position.set(0, -1.5, 0);
     startScreenGroup.add(otYPayCentered);
   }
-  scene.add(startScreenGroup);
 }
 
 function showStartScreen() {
@@ -721,14 +749,9 @@ function showStartScreen() {
     startScreenGroup.visible = true;
   }
   
+  // Hide mainLight to avoid vertical shadows on the vertical plane, but keep other studio lights active for brightness!
   const mainLight = scene.getObjectByName('main-light');
   if (mainLight) mainLight.visible = false;
-  const fillLight = scene.getObjectByName('fill-light');
-  if (fillLight) fillLight.visible = false;
-  const rimLight = scene.getObjectByName('rim-light');
-  if (rimLight) rimLight.visible = false;
-  const frontLight = scene.getObjectByName('front-light');
-  if (frontLight) frontLight.visible = false;
   
   camera.position.set(0, 0.5, 10);
   camera.lookAt(0, 0.5, 0);
@@ -745,12 +768,6 @@ function hideStartScreen() {
   
   const mainLight = scene.getObjectByName('main-light');
   if (mainLight) mainLight.visible = true;
-  const fillLight = scene.getObjectByName('fill-light');
-  if (fillLight) fillLight.visible = true;
-  const rimLight = scene.getObjectByName('rim-light');
-  if (rimLight) rimLight.visible = true;
-  const frontLight = scene.getObjectByName('front-light');
-  if (frontLight) frontLight.visible = true;
 }
 
 // Initialize Graphics & Physics
@@ -880,6 +897,9 @@ async function init() {
       }
     });
     debugLog('Loaded seivy.fbx template successfully.');
+    if (isStartScreenActive) {
+      setupStartScreen();
+    }
   }, undefined, (err) => {
     console.error('Error loading seivy.fbx template:', err);
   });
@@ -894,6 +914,9 @@ async function init() {
       }
     });
     debugLog('Loaded ot Y-Pay.fbx template successfully.');
+    if (isStartScreenActive) {
+      setupStartScreen();
+    }
   }, undefined, (err) => {
     console.error('Error loading ot Y-Pay.fbx template:', err);
   });
@@ -901,14 +924,17 @@ async function init() {
   // Bind 2D Start Button Click Event
   btnStartGame.addEventListener('click', () => {
     hideStartScreen();
-    hudOverlay.classList.remove('hidden');
+    pairingOverlay.classList.remove('hidden');
     startOverlay.classList.add('hidden');
-    startNewGame();
+    fetchServerInfo();
   });
 
   // Load the Maze asset
   currentLevelSpan.textContent = String(currentMazeIndex + 2).padStart(2, '0');
   loadMazeAsset();
+
+  // Show Start Screen immediately on launch
+  showStartScreen();
 
   // Window Resize
   window.addEventListener('resize', onWindowResize);
