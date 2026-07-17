@@ -36,6 +36,29 @@ const modalSubtitle = document.getElementById('modal-subtitle') as HTMLElement;
 const startOverlay = document.getElementById('start-overlay') as HTMLElement;
 const btnStartGame = document.getElementById('btn-start-game') as HTMLButtonElement;
 
+// Debug UI elements
+const btnDebugToggle = document.getElementById('btn-debug-toggle') as HTMLButtonElement;
+const debugPanel = document.getElementById('debug-panel') as HTMLElement;
+const debugLevelSelect = document.getElementById('debug-level-select') as HTMLSelectElement;
+
+const sliderGateX = document.getElementById('slider-gate-x') as HTMLInputElement;
+const sliderGateZ = document.getElementById('slider-gate-z') as HTMLInputElement;
+const sliderGateRy = document.getElementById('slider-gate-ry') as HTMLInputElement;
+const sliderGateScale = document.getElementById('slider-gate-scale') as HTMLInputElement;
+
+const sliderSaveX = document.getElementById('slider-save-x') as HTMLInputElement;
+const sliderSaveZ = document.getElementById('slider-save-z') as HTMLInputElement;
+
+const valGateX = document.getElementById('val-gate-x') as HTMLElement;
+const valGateZ = document.getElementById('val-gate-z') as HTMLElement;
+const valGateRy = document.getElementById('val-gate-ry') as HTMLElement;
+const valGateScale = document.getElementById('val-gate-scale') as HTMLElement;
+
+const valSaveX = document.getElementById('val-save-x') as HTMLElement;
+const valSaveZ = document.getElementById('val-save-z') as HTMLElement;
+
+const debugOutput = document.getElementById('debug-output') as HTMLTextAreaElement;
+
 // Maze level management (Level 2 to Level 7 from /new/)
 const MAZE_FILES = [
   '/source/fixed/labirint2.fbx',
@@ -77,6 +100,8 @@ let saveAnimMesh: THREE.Group | null = null;
 let saveAnimStartWorld = new THREE.Vector3();
 let saveAnimTime = 0.0;
 const SAVE_ANIM_DURATION = 0.8;
+let isDebugModeActive = false;
+let defaultGatesScale = 1.0;
 
 // Start Screen Templates & Group
 let seivyTemplate: THREE.Group | null = null;
@@ -801,6 +826,140 @@ function hideStartScreen() {
   if (mainLight) mainLight.visible = true;
 }
 
+function initDebugControls() {
+  btnDebugToggle.addEventListener('click', () => {
+    isDebugModeActive = !isDebugModeActive;
+    if (isDebugModeActive) {
+      debugPanel.classList.remove('hidden');
+      btnDebugToggle.textContent = '❌ ВЫЙТИ ИЗ ОТЛАДКИ';
+      btnDebugToggle.style.borderColor = 'red';
+      btnDebugToggle.style.color = 'red';
+      
+      // Stop gameplay
+      isGameActive = false;
+      
+      // Set select values
+      debugLevelSelect.value = String(currentMazeIndex);
+      
+      // Sync sliders
+      syncDebugSlidersFromScene();
+      
+      // Top down camera look
+      camera.position.set(0, 30, 0);
+      camera.lookAt(0, 0, 0);
+      camera.up.set(0, 0, -1);
+    } else {
+      debugPanel.classList.add('hidden');
+      btnDebugToggle.textContent = '🔧 ОТЛАДКА';
+      btnDebugToggle.style.borderColor = 'var(--accent-cyan)';
+      btnDebugToggle.style.color = 'var(--accent-cyan)';
+      
+      // Resume game
+      isGameActive = true;
+      positionCamera();
+    }
+  });
+
+  debugLevelSelect.addEventListener('change', () => {
+    const nextIndex = parseInt(debugLevelSelect.value);
+    currentMazeIndex = nextIndex;
+    currentLevelSpan.textContent = String(currentMazeIndex + 1).padStart(2, '0');
+    
+    // Switch level
+    isLevelLoading = true;
+    switchMaze(nextIndex);
+  });
+
+  const onSliderChange = () => {
+    if (!gatesMesh || !saveMesh) return;
+    
+    const gx = parseFloat(sliderGateX.value);
+    const gz = parseFloat(sliderGateZ.value);
+    const gry = parseFloat(sliderGateRy.value) * Math.PI / 180;
+    const gs = parseFloat(sliderGateScale.value);
+    
+    const sx = parseFloat(sliderSaveX.value);
+    const sz = parseFloat(sliderSaveZ.value);
+    
+    // Update Gates
+    gatesMesh.position.x = gx;
+    gatesMesh.position.z = gz;
+    gatesMesh.rotation.y = gry;
+    const finalScale = defaultGatesScale * gs;
+    gatesMesh.scale.set(finalScale, finalScale, finalScale);
+    
+    // Update Save
+    saveMesh.position.x = sx;
+    saveMesh.position.z = sz;
+    
+    // Update labels
+    valGateX.textContent = gx.toFixed(2);
+    valGateZ.textContent = gz.toFixed(2);
+    valGateRy.textContent = sliderGateRy.value;
+    valGateScale.textContent = gs.toFixed(2);
+    
+    valSaveX.textContent = sx.toFixed(2);
+    valSaveZ.textContent = sz.toFixed(2);
+    
+    // Update output text
+    updateDebugOutputText();
+  };
+
+  const sliders = [sliderGateX, sliderGateZ, sliderGateRy, sliderGateScale, sliderSaveX, sliderSaveZ];
+  sliders.forEach(s => {
+    s.addEventListener('input', onSliderChange);
+  });
+}
+
+function syncDebugSlidersFromScene() {
+  if (!gatesMesh || !saveMesh) return;
+  
+  sliderGateX.value = String(gatesMesh.position.x);
+  sliderGateZ.value = String(gatesMesh.position.z);
+  sliderGateRy.value = String(Math.round(gatesMesh.rotation.y * 180 / Math.PI));
+  
+  const curScaleX = gatesMesh.scale.x;
+  const scaleMult = curScaleX / defaultGatesScale;
+  sliderGateScale.value = String(scaleMult);
+  
+  sliderSaveX.value = String(saveMesh.position.x);
+  sliderSaveZ.value = String(saveMesh.position.z);
+  
+  // Set text labels
+  valGateX.textContent = gatesMesh.position.x.toFixed(2);
+  valGateZ.textContent = gatesMesh.position.z.toFixed(2);
+  valGateRy.textContent = String(Math.round(gatesMesh.rotation.y * 180 / Math.PI));
+  valGateScale.textContent = scaleMult.toFixed(2);
+  
+  valSaveX.textContent = saveMesh.position.x.toFixed(2);
+  valSaveZ.textContent = saveMesh.position.z.toFixed(2);
+  
+  updateDebugOutputText();
+}
+
+function updateDebugOutputText() {
+  if (!gatesMesh || !saveMesh) return;
+  
+  const ryDeg = Math.round(gatesMesh.rotation.y * 180 / Math.PI);
+  const data = {
+    levelIndex: currentMazeIndex,
+    levelName: MAZE_FILES[currentMazeIndex].split('/').pop(),
+    save: {
+      x: parseFloat(saveMesh.position.x.toFixed(3)),
+      y: parseFloat(saveMesh.position.y.toFixed(3)),
+      z: parseFloat(saveMesh.position.z.toFixed(3))
+    },
+    gates: {
+      x: parseFloat(gatesMesh.position.x.toFixed(3)),
+      y: parseFloat(gatesMesh.position.y.toFixed(3)),
+      z: parseFloat(gatesMesh.position.z.toFixed(3)),
+      ryDeg: ryDeg,
+      scale: parseFloat(parseFloat(sliderGateScale.value).toFixed(2))
+    }
+  };
+  debugOutput.value = JSON.stringify(data, null, 2);
+}
+
 // Initialize Graphics & Physics
 async function init() {
   // 1. Initialize Rapier Physics WASM
@@ -919,7 +1078,7 @@ async function init() {
   });
 
   // Load seivy.fbx template for Start Screen
-  fbxLoader.load('/3d/seivy.fbx', (fbx) => {
+  fbxLoader.load('/source/seivy.fbx', (fbx) => {
     seivyTemplate = fbx;
     seivyTemplate.traverse((child) => {
       if (child instanceof THREE.Mesh) {
@@ -936,7 +1095,7 @@ async function init() {
   });
 
   // Load ot Y-Pay.fbx template for Start Screen
-  fbxLoader.load('/3d/ot Y-Pay.fbx', (fbx) => {
+  fbxLoader.load('/source/ot Y-Pay.fbx', (fbx) => {
     otYPayTemplate = fbx;
     otYPayTemplate.traverse((child) => {
       if (child instanceof THREE.Mesh) {
@@ -992,6 +1151,9 @@ async function init() {
   // Load the Maze asset (they just go in order from 01 to 06)
   currentLevelSpan.textContent = String(currentMazeIndex + 1).padStart(2, '0');
   loadMazeAsset();
+
+  // Initialize Debug Controls
+  initDebugControls();
 
   // Show Start Screen immediately on launch
   showStartScreen();
@@ -1442,8 +1604,8 @@ function spawnGameElements() {
     gatesBox.getSize(gatesSizeVec);
     const maxDim = Math.max(gatesSizeVec.x, gatesSizeVec.y, gatesSizeVec.z);
     const targetGatesSize = ballRadius * 6.5; // width about 1.6 units
-    const finalGatesScale = (maxDim > 0.0001) ? (targetGatesSize / maxDim) : 1.0;
-    gatesMesh.scale.set(finalGatesScale, finalGatesScale, finalGatesScale);
+    defaultGatesScale = (maxDim > 0.0001) ? (targetGatesSize / maxDim) : 1.0;
+    gatesMesh.scale.set(defaultGatesScale, defaultGatesScale, defaultGatesScale);
 
     // Keep gates aligned on the level floor
     gatesMesh.position.y = floorTopY + 0.03;
@@ -1552,6 +1714,10 @@ function spawnGameElements() {
 
   isLevelLoading = false;
 
+  if (isDebugModeActive) {
+    syncDebugSlidersFromScene();
+  }
+
   // Expose to window for real-time console debugging
   (window as any).physicsWorld = physicsWorld;
   (window as any).ballBody = ballBody;
@@ -1568,6 +1734,11 @@ function onWindowResize() {
   if (isStartScreenActive) {
     camera.position.set(0, 0.5, 10);
     camera.lookAt(0, 0.5, 0);
+    camera.up.set(0, 1, 0);
+  } else if (isDebugModeActive) {
+    camera.position.set(0, 30, 0);
+    camera.lookAt(0, 0, 0);
+    camera.up.set(0, 0, -1);
   } else {
     positionCamera();
   }
@@ -1583,11 +1754,12 @@ function animate() {
   if (isStartScreenActive && startScreenGroup) {
     startScreenGroup.children.forEach((child) => {
       if (child instanceof THREE.Group) {
-        // Slow float up/down bobbing
-        const offset = Math.sin(Date.now() * 0.002 + child.position.y * 5.0) * 0.003;
-        child.position.y += offset;
+        // Absolute non-cumulative bobbing around the target coordinate
+        const originalY = child.name === 'seivy-header' ? 2.5 : -1.5;
+        const offset = Math.sin(Date.now() * 0.002 + originalY * 5.0) * 0.08;
+        child.position.y = originalY + offset;
         // Subtle tilt oscillation
-        child.rotation.y = Math.sin(Date.now() * 0.001 + child.position.y * 3.0) * 0.08;
+        child.rotation.y = Math.sin(Date.now() * 0.0015 + originalY * 3.0) * 0.06;
       }
     });
   }

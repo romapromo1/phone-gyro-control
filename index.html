@@ -130,6 +130,59 @@
     </div>
   </div>
   
-  <script type="module" src="/src/desktop.ts"></script>
+    <!-- Debug Mode Trigger -->
+    <button id="btn-debug-toggle" class="debug-toggle-btn">🔧 ОТЛАДКА</button>
+
+    <!-- Debug Panel Overlay -->
+    <div id="debug-panel" class="debug-panel hidden">
+      <div class="glass-panel debug-content">
+        <h3>Режим отладки</h3>
+        
+        <div class="debug-field">
+          <label>Выбрать Лабиринт:</label>
+          <select id="debug-level-select">
+            <option value="0">Лабиринт 1 (labirint2)</option>
+            <option value="1">Лабиринт 2 (labirint3)</option>
+            <option value="2">Лабиринт 3 (labirint4)</option>
+            <option value="3">Лабиринт 4 (labirint5)</option>
+            <option value="4">Лабиринт 5 (labirint6)</option>
+            <option value="5">Лабиринт 6 (labirint7)</option>
+          </select>
+        </div>
+
+        <div class="debug-group-title">Ворота (Gates)</div>
+        <div class="debug-field">
+          <label>Позиция X: <span id="val-gate-x">0.00</span></label>
+          <input type="range" id="slider-gate-x" min="-25" max="25" step="0.05" value="0" />
+        </div>
+        <div class="debug-field">
+          <label>Позиция Z: <span id="val-gate-z">0.00</span></label>
+          <input type="range" id="slider-gate-z" min="-25" max="25" step="0.05" value="0" />
+        </div>
+        <div class="debug-field">
+          <label>Угол Y (град): <span id="val-gate-ry">0</span>°</label>
+          <input type="range" id="slider-gate-ry" min="0" max="360" step="1" value="0" />
+        </div>
+        <div class="debug-field">
+          <label>Масштаб ворот: <span id="val-gate-scale">1.00</span></label>
+          <input type="range" id="slider-gate-scale" min="0.1" max="4.0" step="0.02" value="1" />
+        </div>
+
+        <div class="debug-group-title">Сейв (Save Checkpoint)</div>
+        <div class="debug-field">
+          <label>Позиция X: <span id="val-save-x">0.00</span></label>
+          <input type="range" id="slider-save-x" min="-25" max="25" step="0.05" value="0" />
+        </div>
+        <div class="debug-field">
+          <label>Позиция Z: <span id="val-save-z">0.00</span></label>
+          <input type="range" id="slider-save-z" min="-25" max="25" step="0.05" value="0" />
+        </div>
+
+        <div class="debug-group-title">Координаты для коммита:</div>
+        <textarea id="debug-output" readonly rows="5"></textarea>
+      </div>
+    </div>
+
+    <script type="module" src="/src/desktop.ts"></script>
 </body>
 </html>
