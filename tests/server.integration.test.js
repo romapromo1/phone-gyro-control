@@ -47,6 +47,7 @@ test('production HTTP routes and WebSocket pairing work together', async (t) => 
     serveStatic: false,
     operatorToken,
     kioskToken,
+    openRouterApiKey: '',
     publicUrl: 'https://gyro-test.onrender.com',
     eventDataDirectory: dataDirectory,
   });
@@ -151,6 +152,7 @@ test('production QR uses the trusted incoming HTTPS origin instead of a containe
     serveStatic: false,
     trustProxy: true,
     kioskToken,
+    publicUrl: null,
     eventDataDirectory: dataDirectory,
   });
   const baseUrl = `http://127.0.0.1:${runtime.port}`;

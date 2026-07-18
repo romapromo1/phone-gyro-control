@@ -28,12 +28,13 @@ export async function startServer(options = {}) {
   const requestedPort = Number(options.port ?? process.env.PORT ?? 3000);
   let boundPort = requestedPort;
   const publicUrl = normalizePublicUrl(
-    firstNonBlank(
-      options.publicUrl,
-      process.env.PUBLIC_URL,
-      process.env.RENDER_EXTERNAL_URL,
-      renderExternalUrl(process.env.RENDER_EXTERNAL_HOSTNAME),
-    ),
+    Object.hasOwn(options, 'publicUrl')
+      ? options.publicUrl
+      : firstNonBlank(
+          process.env.PUBLIC_URL,
+          process.env.RENDER_EXTERNAL_URL,
+          renderExternalUrl(process.env.RENDER_EXTERNAL_HOSTNAME),
+        ),
   );
   const trustProxy = options.trustProxy ?? (
     process.env.RENDER === 'true' || process.env.TRUST_PROXY === '1'
@@ -42,7 +43,9 @@ export async function startServer(options = {}) {
   const kioskToken = options.kioskToken ?? process.env.KIOSK_TOKEN ?? '';
   const kioskAuthRequired = isProd && Boolean(publicUrl || trustProxy);
   const openRouterApiKey = normalizeSecret(
-    options.openRouterApiKey ?? process.env.OPENROUTER_API_KEY,
+    Object.hasOwn(options, 'openRouterApiKey')
+      ? options.openRouterApiKey
+      : process.env.OPENROUTER_API_KEY,
   );
   const openRouterImageModel = normalizeOpenRouterImageModel(
     options.openRouterImageModel ?? process.env.OPENROUTER_IMAGE_MODEL,
