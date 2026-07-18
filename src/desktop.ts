@@ -27,7 +27,13 @@ import {
   type EditorTarget,
 } from './editor/SceneEditorPanel';
 
-// Connect to the socket server
+const KIOSK_TOKEN_STORAGE_KEY = 'gyro-kiosk-token';
+const KIOSK_TOKEN_PATTERN = /^[a-zA-Z0-9_-]{16,256}$/;
+const kioskToken = readKioskToken();
+const desktopInstanceId = crypto.randomUUID();
+
+// Connect only after the one-time kiosk activation fragment has been read.
+// This prevents the first Socket.IO registration from racing token storage.
 const socket = io({
   // Use polling for the initial handshake and upgrade to WebSocket. This
   // keeps the kiosk registered on venue networks that block direct WS.
@@ -36,24 +42,62 @@ const socket = io({
   reconnection: true,
   reconnectionDelayMax: 2_000,
 });
-const KIOSK_TOKEN_STORAGE_KEY = 'gyro-kiosk-token';
-const kioskToken = readKioskToken();
-const desktopInstanceId = crypto.randomUUID();
 
 // Logging helper to relay browser logs to the Node.js server terminal
 function debugLog(msg: string) {
   if (import.meta.env.DEV) console.debug(msg);
 }
 
+function getBrowserStorage(name: 'localStorage' | 'sessionStorage') {
+  try {
+    return window[name];
+  } catch {
+    return null;
+  }
+}
+
+function readStorageToken(storage: Storage | null) {
+  if (!storage) return '';
+  try {
+    const value = storage.getItem(KIOSK_TOKEN_STORAGE_KEY) || '';
+    return KIOSK_TOKEN_PATTERN.test(value) ? value : '';
+  } catch {
+    return '';
+  }
+}
+
+function persistKioskToken(value: string) {
+  // The installation runs in a dedicated kiosk browser profile. localStorage
+  // keeps the activation across tab/browser restarts; sessionStorage remains a
+  // fallback for privacy modes that reject persistent storage.
+  for (const storage of [getBrowserStorage('localStorage'), getBrowserStorage('sessionStorage')]) {
+    if (!storage) continue;
+    try {
+      storage.setItem(KIOSK_TOKEN_STORAGE_KEY, value);
+    } catch {
+      // Continue with the other storage backend.
+    }
+  }
+}
+
 function readKioskToken() {
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-  const supplied = hash.get('kiosk');
+  const supplied = hash.get('kiosk') || '';
   if (supplied) {
-    sessionStorage.setItem(KIOSK_TOKEN_STORAGE_KEY, supplied);
     history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
-    return supplied;
+    if (KIOSK_TOKEN_PATTERN.test(supplied)) {
+      persistKioskToken(supplied);
+      return supplied;
+    }
+    console.error('Kiosk activation token has an invalid format.');
   }
-  return sessionStorage.getItem(KIOSK_TOKEN_STORAGE_KEY) || '';
+
+  const persistentToken = readStorageToken(getBrowserStorage('localStorage'));
+  if (persistentToken) return persistentToken;
+
+  const sessionToken = readStorageToken(getBrowserStorage('sessionStorage'));
+  if (sessionToken) persistKioskToken(sessionToken);
+  return sessionToken;
 }
 
 // UI Elements
@@ -1841,8 +1885,8 @@ function updateShadowSystem(now: number, forceShadowMap = false) {
   shadowKeyLight.target.position.copy(shadowFocus);
   shadowKeyLight.target.updateMatrixWorld();
 
-  // Fit the 2048 map tightly around the visible content. This keeps shadows
-  // crisp on a two-metre 4K display without increasing texture resolution.
+  // Fit the VSM map tightly around the visible content. This preserves usable
+  // texel density and a clean soft edge on the two-metre 4K display.
   const shadowExtent = experienceScreen === 'labyrinth'
     ? Math.max(8, contentRadius * 1.35)
     : 3.4;
@@ -1857,9 +1901,11 @@ function updateShadowSystem(now: number, forceShadowMap = false) {
     forceShadowMap = true;
   }
 
-  // Animated objects still receive live shadows, but 30 shadow updates per
-  // second are visually smooth while cutting the most expensive pass in half.
-  const shadowInterval = experienceScreen === 'labyrinth' && !isGameActive ? 66 : 33;
+  // VSM is intentionally updated less often than the scene. Its soft edge
+  // masks the lower cadence, while the maze and gyro motion remain full-rate.
+  const shadowInterval = experienceScreen === 'labyrinth'
+    ? (isGameActive ? 50 : 100)
+    : 84;
   if (forceShadowMap || now >= nextShadowMapUpdateAt) {
     renderer.shadowMap.needsUpdate = true;
     nextShadowMapUpdateAt = now + shadowInterval;
@@ -2003,16 +2049,22 @@ async function init() {
   // Camera setup optimized for 9:16 layout
   camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
   
+  const viewportPixels = window.innerWidth * window.innerHeight;
   renderer = new THREE.WebGLRenderer({
     canvas: document.getElementById('game-canvas') as HTMLCanvasElement,
-    antialias: true,
+    // Native 4K already has enough pixel density for clean geometry edges.
+    // Avoiding an additional multisample buffer there saves a large GPU pass.
+    antialias: viewportPixels < 6_000_000,
     alpha: false,
     powerPreference: "high-performance"
   });
   renderer.setSize(window.innerWidth, window.innerHeight);
   updateRendererQuality();
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFShadowMap;
+  // VSM uses regular floating-point samplers. Besides producing the soft
+  // exhibition shadow we want, it avoids PCF depth-comparison sampler failures
+  // seen on some Windows/ANGLE driver combinations.
+  renderer.shadowMap.type = THREE.VSMShadowMap;
   renderer.shadowMap.autoUpdate = false;
 
   // 2. Add Studio Lights (increased intensities so everything is well-lit from all sides)
@@ -2046,7 +2098,9 @@ async function init() {
   shadowKeyLight = new THREE.DirectionalLight(0xffffff, shadowSettings.lightIntensity);
   shadowKeyLight.name = 'shadow-key-light';
   shadowKeyLight.castShadow = true;
-  shadowKeyLight.shadow.mapSize.set(2048, 2048);
+  shadowKeyLight.shadow.mapSize.set(1536, 1536);
+  shadowKeyLight.shadow.radius = 3.5;
+  shadowKeyLight.shadow.blurSamples = 6;
   shadowKeyLight.shadow.bias = -0.00035;
   shadowKeyLight.shadow.normalBias = 0.035;
   shadowKeyLight.shadow.camera.left = -24;
@@ -2640,10 +2694,11 @@ function animate(now: number) {
     return;
   }
 
-  // The attract screen and inactive labyrinth keep high-quality 3D at 30 FPS;
-  // active play and interactive team balls remain at 60 FPS.
+  // Presentation/selection scenes run at a stable 30 FPS. Active maze play
+  // remains at display rate so smartphone tilt input stays responsive.
   const useThirtyFps = experienceScreen === 'start'
     || experienceScreen === 'transition'
+    || experienceScreen === 'team'
     || (experienceScreen === 'labyrinth' && !isGameActive);
   if (useThirtyFps && now - lastFrameAt < 33) {
     requestAnimationFrame(animate);
