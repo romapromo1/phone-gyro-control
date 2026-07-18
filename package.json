@@ -24,6 +24,7 @@
     "@mediapipe/tasks-vision": "^0.10.35",
     "@types/express": "^5.0.6",
     "@types/node": "^26.1.0",
+    "@types/qrcode": "^1.5.6",
     "@types/three": "^0.185.0",
     "express": "^5.2.1",
     "fflate": "^0.8.3",
@@ -34,8 +35,5 @@
     "three": "^0.185.1",
     "typescript": "^6.0.3",
     "vite": "^8.1.3"
-  },
-  "devDependencies": {
-    "@types/qrcode": "^1.5.6"
   }
 }
