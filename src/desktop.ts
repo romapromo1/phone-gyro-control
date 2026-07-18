@@ -1,16 +1,55 @@
 import * as THREE from 'three';
-import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import RAPIER from '@dimforge/rapier3d-compat';
+import type RAPIER_TYPES from '@dimforge/rapier3d-compat';
 import { io } from 'socket.io-client';
+import { EVENTS, SESSION_COMMANDS } from '../shared/protocol.js';
+import { AssetManager } from './game/AssetManager';
+import { GameSession } from './game/GameSession';
+import {
+  COUNTDOWN_DURATION_MS,
+  GAME_DURATION_MS,
+  LEVELS,
+  RESULT_DISPLAY_MS,
+  STATION_ID,
+} from './game/config';
+import { disposeObject, removeNamedChildren } from './game/dispose';
+import {
+  TEAMS,
+  TeamSelection3D,
+  type TeamCameraView,
+  type TeamDefinition,
+} from './experience/TeamSelection3D';
+import { submitTeamGeneration } from './experience/teamGenerationService';
+import { ThumbUpCapture, type ThumbCaptureState } from './experience/ThumbUpCapture';
+import {
+  SceneEditorPanel,
+  type EditorField,
+  type EditorTarget,
+} from './editor/SceneEditorPanel';
 
 // Connect to the socket server
-const socket = io();
+const socket = io({
+  transports: ['websocket'],
+  reconnection: true,
+  reconnectionDelayMax: 2_000,
+});
+const KIOSK_TOKEN_STORAGE_KEY = 'gyro-kiosk-token';
+const kioskToken = readKioskToken();
+const desktopInstanceId = crypto.randomUUID();
 
 // Logging helper to relay browser logs to the Node.js server terminal
 function debugLog(msg: string) {
-  console.log(msg);
-  socket.emit('log', msg);
+  if (import.meta.env.DEV) console.debug(msg);
+}
+
+function readKioskToken() {
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const supplied = hash.get('kiosk');
+  if (supplied) {
+    sessionStorage.setItem(KIOSK_TOKEN_STORAGE_KEY, supplied);
+    history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+    return supplied;
+  }
+  return sessionStorage.getItem(KIOSK_TOKEN_STORAGE_KEY) || '';
 }
 
 // UI Elements
@@ -24,6 +63,8 @@ const btnRestart = document.getElementById('btn-restart') as HTMLButtonElement;
 const victoryOverlay = document.getElementById('victory-overlay') as HTMLElement;
 const btnPrevLevel = document.getElementById('btn-prev-level') as HTMLButtonElement;
 const btnNextLevel = document.getElementById('btn-next-level') as HTMLButtonElement;
+const connectionIndicator = document.getElementById('connection-indicator') as HTMLElement;
+const connectionStatusText = document.getElementById('connection-status-text') as HTMLElement;
 
 // New HUD elements Binds
 const timerSpan = document.getElementById('game-timer') as HTMLElement;
@@ -35,22 +76,24 @@ const modalSubtitle = document.getElementById('modal-subtitle') as HTMLElement;
 // Start Screen elements
 const startOverlay = document.getElementById('start-overlay') as HTMLElement;
 const btnStartGame = document.getElementById('btn-start-game') as HTMLButtonElement;
+const teamSelectionOverlay = document.getElementById('team-selection-overlay') as HTMLElement;
+const btnOpenCamera = document.getElementById('btn-open-camera') as HTMLButtonElement;
+const photoOverlay = document.getElementById('photo-overlay') as HTMLElement;
+const cameraVideo = document.getElementById('camera-video') as HTMLVideoElement;
+const cameraPreview = document.getElementById('camera-preview') as HTMLImageElement;
+const cameraCapture = document.getElementById('camera-capture') as HTMLCanvasElement;
+const cameraStatus = document.getElementById('camera-status') as HTMLElement;
+const cameraFlash = document.getElementById('camera-flash') as HTMLElement;
+const btnCapturePhoto = document.getElementById('btn-capture-photo') as HTMLButtonElement;
+const btnRetakePhoto = document.getElementById('btn-retake-photo') as HTMLButtonElement;
+const btnConfirmPhoto = document.getElementById('btn-confirm-photo') as HTMLButtonElement;
 
 
 
-// Maze level management (Level 2 to Level 7 from /new/)
-const MAZE_FILES = [
-  '/source/fixed/labirint2.fbx',
-  '/source/fixed/labirint3.fbx',
-  '/source/fixed/labirint5.fbx',
-  '/source/fixed/labirint7.fbx'
-];
-const DEFAULT_SAVE_COORDS = [
-  { x: 5.3,   z: 1.8 },   // Лабиринт 2 (индекс 0)
-  { x: -2.95, z: -2.95 }, // Лабиринт 3 (индекс 1)
-  { x: 2.9,   z: -0.55 }, // Лабиринт 5 (индекс 2)
-  { x: 4.15,  z: -1.8 }   // Лабиринт 7 (индекс 3)
-];
+const assetManager = new AssetManager(LEVELS);
+const gameSession = new GameSession(GAME_DURATION_MS, COUNTDOWN_DURATION_MS);
+let RAPIER: typeof RAPIER_TYPES;
+let gameRuntimePromise: Promise<void> | null = null;
 let currentMazeIndex = 0;
 let isAnimating = false; // prevent calling animate() multiple times
 
@@ -59,15 +102,28 @@ let savesCollected = 0;
 const totalSavesGoal = 4;
 let gameTimeLeft = 60.0;
 let isGameActive = false;
-let gameTimerInterval: any = null;
+let currentControllerSessionId: string | null = null;
+let sessionPreparationInFlight = false;
+let resultResetTimer: number | null = null;
+let pairingRefreshTimer: number | null = null;
+let lifecycleVersion = 0;
+type ExperienceScreen = 'start' | 'transition' | 'team' | 'photo' | 'labyrinth';
+let experienceScreen: ExperienceScreen = 'start';
+let teamSelection: TeamSelection3D | null = null;
+let selectedTeam: TeamDefinition | null = null;
+let cameraStream: MediaStream | null = null;
+let capturedPhotoDataUrl = '';
+let photoCaptureInFlight = false;
+let generationAbortController: AbortController | null = null;
+const thumbUpCapture = new ThumbUpCapture();
+let cameraStatusTimer: number | null = null;
 
 // Transition and save object state
-let saveTemplate: THREE.Group | null = null;
 let saveMesh: THREE.Group | null = null;
+let saveEditorRoot: THREE.Group | null = null;
 const customSaveCoordinates: { [key: number]: { x: number, z: number } } = {};
 
 // Football and Gates Templates & State
-let footballTemplate: THREE.Group | null = null;
 let isSaveCollected = false;
 
 
@@ -81,7 +137,6 @@ let nextMazeIndexToLoad = -1;
 
 let mazeMaterial: THREE.MeshPhysicalMaterial;
 let floorMaterial: THREE.MeshStandardMaterial;
-let activeLoadId = 0;
 
 // Sound Manager using Web Audio API (Synthesized sounds)
 class SoundManager {
@@ -228,15 +283,19 @@ window.addEventListener('touchstart', handleUserGesture);
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
 let renderer: THREE.WebGLRenderer;
-let clock: THREE.Clock;
+let lastFrameAt = 0;
+let environmentReady = false;
 
-let physicsWorld: RAPIER.World;
-let ballBody: RAPIER.RigidBody | null = null;
+let physicsWorld: RAPIER_TYPES.World;
+let ballBody: RAPIER_TYPES.RigidBody | null = null;
 let ballMesh: THREE.Object3D | null = null;
+let ballEditorRoot: THREE.Group | null = null;
 let ballRadius = 0.25; 
+let gameSceneEditorRoot: THREE.Group;
 let mazeContainer: THREE.Group; // Outer group centered at (0, 0, 0) which we rotate
+let mazeEditorRoot: THREE.Group | null = null;
 let mazeGroup: THREE.Group | null = null;   // Inner group containing FBX mesh shifted by -center
-let mazeBody: RAPIER.RigidBody | null = null;
+let mazeBody: RAPIER_TYPES.RigidBody | null = null;
 
 // Telemetry & Tilting
 let targetPitch = 0; // Pitch (from beta): -1.0 to 1.0
@@ -254,6 +313,10 @@ let cameraAngleDeg = 0.0; // starts at 0 degrees horizontal front look (straight
 let mazeYOffset = 0.0;
 let cameraHeight = 0.0; // will be dynamically set based on maze size
 let sceneYShift = 0.0;  // moves the entire scene up/down visually
+let gameCameraX = 0.0;
+let gameCameraDistanceMultiplier = 1.9;
+let gameCameraTargetY = 1.0;
+let gameCameraFov = 45;
 let phoneYaw = 0;       // target yaw angle from phone orientation
 let currentYaw = 0;     // current interpolated yaw angle
 let isLevelLoading = false; // blocks visual rotation during level loading
@@ -270,58 +333,258 @@ let physicsAccumulator = 0.0;
 const PHYSICS_TIMESTEP = 1 / 60; // 60 Hz physics step
 const MAX_PHYSICS_STEPS_PER_FRAME = 3;
 
+const startCameraView = {
+  position: new THREE.Vector3(0, 0.5, 10),
+  target: new THREE.Vector3(0, 0.5, 0),
+  fov: 45,
+};
+const teamCameraView: TeamCameraView = {
+  position: { x: 0, y: 0.35, z: 12 },
+  target: { x: 0, y: -0.35, z: 0 },
+  fov: 45,
+};
+const shadowSettings = {
+  opacity: 0.22,
+  distanceBehindFocus: 3.5,
+  size: 60,
+  lightOffsetX: -5,
+  lightOffsetY: 7,
+  lightIntensity: 0.42,
+};
+let shadowReceiver: THREE.Mesh<THREE.PlaneGeometry, THREE.ShadowMaterial> | null = null;
+let shadowKeyLight: THREE.DirectionalLight | null = null;
+let nextShadowMapUpdateAt = 0;
+let lastShadowExtent = 0;
+let sceneEditorPanel: SceneEditorPanel | null = null;
+
+// Native 4K remains native on a large display (DPR=1), while high-DPR phones
+// no longer supersample the full-screen scene at an 8K-equivalent resolution.
+const MAX_RENDER_PIXELS = 3_840 * 2_160;
+
+function getTargetPixelRatio() {
+  const deviceRatio = Math.max(1, window.devicePixelRatio || 1);
+  const qualityCap = experienceScreen === 'labyrinth'
+    ? 1.5
+    : experienceScreen === 'team' ? 1.25 : 1;
+  const nativePixels = Math.max(1, window.innerWidth * window.innerHeight);
+  const budgetRatio = Math.max(1, Math.sqrt(MAX_RENDER_PIXELS / nativePixels));
+  return Math.min(deviceRatio, qualityCap, budgetRatio);
+}
+
+function updateRendererQuality() {
+  if (!renderer) return;
+  renderer.setPixelRatio(getTargetPixelRatio());
+}
+
 // Self-healing reset logic
 let resetCount = 0;
 let aliveTime = 0;
 
 // For collision impact detection
 let lastVelocity = new THREE.Vector3();
+const frameVelocity = new THREE.Vector3();
+const frameAcceleration = new THREE.Vector3();
+const frameBallXZ = new THREE.Vector2();
+const frameSaveXZ = new THREE.Vector2();
+const frameMazeRotation = new THREE.Quaternion();
+const frameMazeEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 
 // Fetch server pairing information
 async function fetchServerInfo() {
   try {
-    const res = await fetch('/api/server-info');
+    const res = await fetch(`/api/server-info?station=${encodeURIComponent(STATION_ID)}`, {
+      cache: 'no-store',
+      headers: kioskToken ? { Authorization: `Bearer ${kioskToken}` } : {},
+    });
     const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.state ? `Станция занята: ${data.state}` : 'QR временно недоступен');
+    }
     qrCodeImg.src = data.qrDataUrl;
     controllerUrlCode.textContent = data.mobileUrl;
+    if (pairingRefreshTimer !== null) window.clearTimeout(pairingRefreshTimer);
+    const refreshDelay = Math.max(10_000, Math.min(60_000, Number(data.expiresAt) - Date.now() - 15_000));
+    pairingRefreshTimer = window.setTimeout(() => {
+      if (gameSession.state === 'pairing') void fetchServerInfo();
+    }, refreshDelay);
   } catch (err) {
     console.error('Error fetching server info:', err);
-    controllerUrlCode.textContent = 'Ошибка загрузки адреса';
+    controllerUrlCode.textContent = 'Обновляем QR-код…';
+    if (gameSession.state === 'pairing') {
+      pairingRefreshTimer = window.setTimeout(() => void fetchServerInfo(), 3_000);
+    }
   }
 }
 
 // Set up websockets
 socket.on('connect', () => {
-  debugLog('Connected to websocket server, registering as desktop...');
-  socket.emit('register', 'desktop');
+  debugLog(`Connected to session server as station ${STATION_ID}.`);
+  socket.emit(
+    EVENTS.REGISTER_DESKTOP,
+    { stationId: STATION_ID, kioskToken, instanceId: desktopInstanceId },
+    (response: { ok?: boolean; reason?: string }) => {
+      if (response?.ok !== false) return;
+      updateConnectionStatus('HOLOBOX НЕ АВТОРИЗОВАН', true);
+      controllerUrlCode.textContent = response.reason === 'kiosk-unauthorized'
+        ? 'Откройте Render URL с фрагментом #kiosk=<KIOSK_TOKEN>.'
+        : 'Не удалось зарегистрировать игровой экран.';
+    },
+  );
 });
 
-socket.on('gyro-update', (data: { beta: number; gamma: number; alpha?: number }) => {
-  isControllerConnected = true;
+socket.on('disconnect', () => {
+  isControllerConnected = false;
+  phonePitch = 0;
+  phoneRoll = 0;
+  phoneYaw = 0;
+  gameSession.pause(performance.now());
+  isGameActive = false;
+  updateConnectionStatus('ВОССТАНАВЛИВАЕМ СВЯЗЬ С СЕРВЕРОМ', true);
+});
 
-  // If pairing overlay is visible, it means we were waiting for connection
-  if (!pairingOverlay.classList.contains('hidden')) {
+socket.on(EVENTS.CONTROLLER_STATUS, (status: {
+  connected: boolean;
+  recoverable?: boolean;
+  sessionId?: string | null;
+  state?: string;
+}) => {
+  if (status.connected) {
+    isControllerConnected = true;
+    currentControllerSessionId = status.sessionId || currentControllerSessionId;
     pairingOverlay.classList.add('hidden');
     hudOverlay.classList.remove('hidden');
-    
-    // Initialize audio context
-    sounds.init();
-    // Start game mode
-    startNewGame();
+    updateConnectionStatus('СМАРТФОН АКТИВЕН');
+    calibrate();
+    if (gameSession.state === 'paused') {
+      gameSession.resume(performance.now());
+      isGameActive = gameSession.isPlaying();
+    } else if (gameSession.state === 'pairing') {
+      gameSession.controllerConnected();
+    }
+    return;
   }
 
-  // Save raw normalized sensor telemetry (-1.0 to 1.0)
+  isControllerConnected = false;
+  phonePitch = 0;
+  phoneRoll = 0;
+  phoneYaw = 0;
+  if (status.recoverable) {
+    gameSession.pause(performance.now());
+    isGameActive = false;
+    updateConnectionStatus('ВОССТАНАВЛИВАЕМ СВЯЗЬ', true);
+  } else if (gameSession.state !== 'result') {
+    updateConnectionStatus('СМАРТФОН НЕ ПОДКЛЮЧЁН', true);
+    if (gameSession.state !== 'attract' && gameSession.state !== 'pairing') {
+      void openPairing(false);
+    }
+  }
+});
+
+socket.on(EVENTS.GYRO_UPDATE, (data: {
+  beta: number;
+  gamma: number;
+  alpha?: number;
+  sessionId?: string;
+}) => {
+  if (!isControllerConnected || (data.sessionId && data.sessionId !== currentControllerSessionId)) return;
+
   phonePitch = data.beta;
   phoneRoll = data.gamma;
   if (data.alpha !== undefined) {
-    phoneYaw = data.alpha * Math.PI / 180; // convert calibrated yaw from degrees to radians
+    phoneYaw = data.alpha * Math.PI / 180;
+  }
+  if (gameSession.state === 'calibrating' && !sessionPreparationInFlight) {
+    void prepareControllerGame();
   }
 });
 
-socket.on('calibrate-request', () => {
+socket.on(EVENTS.CALIBRATE_REQUEST, () => {
   debugLog('Calibration request received.');
   calibrate();
 });
+
+socket.on(EVENTS.SESSION_ENDED, (payload: { reason?: string }) => {
+  debugLog(`Session ended by server: ${payload.reason || 'unknown'}`);
+  if (gameSession.state !== 'result') void openPairing(false);
+});
+
+async function prepareControllerGame() {
+  if (sessionPreparationInFlight || gameSession.state !== 'calibrating') return;
+  sessionPreparationInFlight = true;
+  const expectedLifecycle = lifecycleVersion;
+  updateConnectionStatus('ГОТОВИМ ИГРУ…');
+  try {
+    await prepareNewGame();
+    if (
+      expectedLifecycle !== lifecycleVersion ||
+      !isControllerConnected ||
+      gameSession.state !== 'calibrating'
+    ) return;
+    gameSession.beginCountdown(performance.now());
+    updateConnectionStatus('СТАРТ ЧЕРЕЗ 3');
+  } catch (error) {
+    console.error('Failed to prepare game session:', error);
+    controllerUrlCode.textContent = 'Ошибка загрузки игры. Нажмите «Начать заново».';
+    updateConnectionStatus('ОШИБКА ПОДГОТОВКИ', true);
+  } finally {
+    sessionPreparationInFlight = false;
+  }
+}
+
+async function openPairing(resetServer: boolean) {
+  lifecycleVersion += 1;
+  if (resultResetTimer !== null) window.clearTimeout(resultResetTimer);
+  resultResetTimer = null;
+  if (pairingRefreshTimer !== null) window.clearTimeout(pairingRefreshTimer);
+  pairingRefreshTimer = null;
+  gameSession.enterPairing();
+  isGameActive = false;
+  isControllerConnected = false;
+  currentControllerSessionId = null;
+  calibrate();
+  if (ballBody) {
+    ballBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    ballBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  }
+  if (physicsWorld) physicsWorld.gravity = { x: 0, y: -35, z: 0 };
+  victoryOverlay.classList.add('hidden');
+  hudOverlay.classList.add('hidden');
+  pairingOverlay.classList.remove('hidden');
+  updateConnectionStatus('ОЖИДАНИЕ СМАРТФОНА', true);
+
+  try {
+    if (resetServer) {
+      await sendSessionCommand(SESSION_COMMANDS.PAIR);
+    }
+    await fetchServerInfo();
+  } catch (error) {
+    console.error('Failed to open pairing:', error);
+    controllerUrlCode.textContent = 'Нет связи с сервером. Повторяем…';
+    pairingRefreshTimer = window.setTimeout(() => void openPairing(false), 3_000);
+  }
+}
+
+function updateConnectionStatus(text: string, disconnected = false) {
+  if (connectionStatusText.textContent !== text) connectionStatusText.textContent = text;
+  if (connectionIndicator.classList.contains('disconnected') !== disconnected) {
+    connectionIndicator.classList.toggle('disconnected', disconnected);
+  }
+}
+
+function setTextIfChanged(element: HTMLElement, text: string) {
+  if (element.textContent !== text) element.textContent = text;
+}
+
+function sendSessionCommand(action: string, result?: { isWin: boolean; savesCollected: number; elapsedMs: number }) {
+  return new Promise<Record<string, unknown>>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(`Session command timed out: ${action}`)), 5_000);
+    socket.emit(EVENTS.SESSION_COMMAND, { stationId: STATION_ID, action, result }, (response: { ok?: boolean; reason?: string }) => {
+      window.clearTimeout(timer);
+      if (!response?.ok) reject(new Error(response?.reason || `Session command failed: ${action}`));
+      else resolve(response as Record<string, unknown>);
+    });
+  });
+}
 
 // Setup calibration
 function calibrate() {
@@ -343,115 +606,86 @@ function calibrate() {
 
 btnCalibrate.addEventListener('click', () => {
   calibrate();
-  socket.emit('calibrate'); // Tell mobile to calibrate offset
+  socket.emit(EVENTS.CALIBRATE);
   sounds.init(); // Initialize sound on button press just in case
 });
 
 btnRestart.addEventListener('click', () => {
-  startNewGame();
+  void resetExperience(true);
 });
 
 btnHudRestart?.addEventListener('click', () => {
-  startNewGame();
+  void resetExperience(true);
 });
 
 btnPrevLevel?.addEventListener('click', () => {
-  switchMaze((currentMazeIndex - 1 + MAZE_FILES.length) % MAZE_FILES.length);
+  switchMaze((currentMazeIndex - 1 + LEVELS.length) % LEVELS.length);
 });
 
 btnNextLevel?.addEventListener('click', () => {
-  switchMaze((currentMazeIndex + 1) % MAZE_FILES.length);
+  switchMaze((currentMazeIndex + 1) % LEVELS.length);
 });
 
 function switchMaze(newIndex: number) {
   if (newIndex === currentMazeIndex) return;
+  cleanupCurrentLevel();
   currentMazeIndex = newIndex;
   currentLevelSpan.textContent = String(currentMazeIndex + 1).padStart(2, '0');
-  debugLog(`Switching to maze ${currentMazeIndex + 1}: ${MAZE_FILES[currentMazeIndex]}`);
-
-  // 1. Remove old ball body and mesh
-  if (ballBody) {
-    physicsWorld.removeRigidBody(ballBody);
-    ballBody = null;
-  }
-  if (ballMesh) {
-    mazeContainer.remove(ballMesh);
-    ballMesh = null;
-  }
-
-  // 2. Remove old maze body
-  if (mazeBody) {
-    physicsWorld.removeRigidBody(mazeBody);
-    mazeBody = null;
-  }
-
-  // 3. Remove old visual maze
-  if (mazeGroup) {
-    mazeContainer.remove(mazeGroup);
-    mazeGroup = null;
-  }
-
-  // 4. Remove markers and lights
-  const oldFinish = mazeContainer.getObjectByName('finish-marker');
-  if (oldFinish) mazeContainer.remove(oldFinish);
-
-  const oldFinishLight = mazeContainer.getObjectByName('finish-light');
-  if (oldFinishLight) mazeContainer.remove(oldFinishLight);
-
-  const oldStartLight = mazeContainer.getObjectByName('start-light');
-  if (oldStartLight) mazeContainer.remove(oldStartLight);
-
-  const oldSaveItem = mazeContainer.getObjectByName('save-item');
-  if (oldSaveItem) mazeContainer.remove(oldSaveItem);
-
-  // Remove old floor plane
-  const oldFloor = mazeContainer.getObjectByName('floor-mesh');
-  if (oldFloor) mazeContainer.remove(oldFloor);
-
-  // 5. Reset level state
+  debugLog(`Switching to maze ${currentMazeIndex + 1}: ${LEVELS[currentMazeIndex].asset}`);
   resetCount = 0;
   aliveTime = 0;
   victoryOverlay.classList.add('hidden');
-
-  // 6. Load new maze
   loadMazeAsset();
 }
 
-function startTimer() {
-  if (gameTimerInterval) clearInterval(gameTimerInterval);
-  
-  gameTimeLeft = 60.0;
-  if (timerSpan) timerSpan.textContent = String(Math.ceil(gameTimeLeft));
-  
-  gameTimerInterval = setInterval(() => {
-    if (!isGameActive) return;
-    
-    gameTimeLeft -= 1.0;
-    if (gameTimeLeft <= 0.0) {
-      gameTimeLeft = 0.0;
-      if (timerSpan) timerSpan.textContent = '0';
-      clearInterval(gameTimerInterval);
-      endGame(false); // Time ran out!
-    } else {
-      if (timerSpan) timerSpan.textContent = String(Math.ceil(gameTimeLeft));
-    }
-  }, 1000);
+function cleanupCurrentLevel() {
+  if (ballBody && physicsWorld) physicsWorld.removeRigidBody(ballBody);
+  if (mazeBody && physicsWorld) physicsWorld.removeRigidBody(mazeBody);
+  ballBody = null;
+  mazeBody = null;
+  disposeObject(ballMesh, true);
+  disposeObject(saveMesh, true);
+  disposeObject(mazeGroup, false);
+  ballEditorRoot?.removeFromParent();
+  saveEditorRoot?.removeFromParent();
+  mazeEditorRoot?.removeFromParent();
+  ballMesh = null;
+  ballEditorRoot = null;
+  saveMesh = null;
+  saveEditorRoot = null;
+  mazeGroup = null;
+  mazeEditorRoot = null;
+  removeNamedChildren(mazeContainer, [
+    'finish-marker',
+    'finish-light',
+    'start-light',
+    'save-item',
+    'floor-mesh',
+    'football-gates',
+    'save-highlight-front',
+    'save-highlight-back',
+    'save-highlight-top',
+  ]);
+  lastVelocity.set(0, 0, 0);
+  physicsAccumulator = 0;
 }
 
 function endGame(isWin: boolean) {
+  if (gameSession.state === 'result') return;
+  const now = performance.now();
+  gameSession.finish(now);
+  const elapsedMs = Math.round(gameSession.elapsedMs(now));
   isGameActive = false;
-  if (gameTimerInterval) clearInterval(gameTimerInterval);
-  
-  // Stop physics
+  gameTimeLeft = Math.max(0, (GAME_DURATION_MS - elapsedMs) / 1000);
+  physicsWorld.gravity = { x: 0, y: -35, z: 0 };
   if (ballBody) {
     ballBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
     ballBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
+  calibrate();
+  updateConnectionStatus('СЕССИЯ ЗАВЕРШЕНА');
   
-  // Show modal pop-up
-  if (victoryOverlay) {
-    victoryOverlay.classList.remove('hidden');
-  }
+  victoryOverlay.classList.remove('hidden');
   
   if (isWin) {
     if (modalTitle) {
@@ -461,7 +695,7 @@ function endGame(isWin: boolean) {
       modalTitle.style.webkitTextFillColor = 'transparent';
     }
     if (modalSubtitle) {
-      modalSubtitle.textContent = `Вы собрали все 6 сейвов за ${Math.round(60.0 - gameTimeLeft)} секунд!`;
+      modalSubtitle.textContent = `Вы собрали все ${totalSavesGoal} сейва за ${Math.round(elapsedMs / 1000)} секунд!`;
     }
   } else {
     if (modalTitle) {
@@ -471,75 +705,31 @@ function endGame(isWin: boolean) {
       modalTitle.style.webkitTextFillColor = 'transparent';
     }
     if (modalSubtitle) {
-      modalSubtitle.textContent = `Вы успели собрать ${savesCollected} из 6 сейвов.`;
+      modalSubtitle.textContent = `Вы успели собрать ${savesCollected} из ${totalSavesGoal} сейвов.`;
     }
   }
+
+  void sendSessionCommand(SESSION_COMMANDS.FINISH, { isWin, savesCollected, elapsedMs })
+    .catch((error) => console.error('Failed to close server session:', error));
+  if (resultResetTimer !== null) window.clearTimeout(resultResetTimer);
+  resultResetTimer = window.setTimeout(() => void resetExperience(true), RESULT_DISPLAY_MS);
 }
 
-function startNewGame() {
+async function prepareNewGame() {
+  isGameActive = false;
+  await ensureGameRuntime();
   savesCollected = 0;
   currentMazeIndex = 0;
-
-  // Clean up any existing ball, physics, and old level assets first!
-  if (ballBody && physicsWorld) {
-    physicsWorld.removeRigidBody(ballBody);
-    ballBody = null;
-  }
-  if (ballMesh) {
-    mazeContainer.remove(ballMesh);
-    ballMesh = null;
-  }
-  if (mazeBody && physicsWorld) {
-    physicsWorld.removeRigidBody(mazeBody);
-    mazeBody = null;
-  }
-  if (mazeGroup) {
-    mazeContainer.remove(mazeGroup);
-    mazeGroup = null;
-  }
-  
-  // Remove old markers, lights, save meshes, etc.
-  const oldFinish = mazeContainer.getObjectByName('finish-marker');
-  if (oldFinish) mazeContainer.remove(oldFinish);
-
-  const oldFinishLight = mazeContainer.getObjectByName('finish-light');
-  if (oldFinishLight) mazeContainer.remove(oldFinishLight);
-
-  const oldStartLight = mazeContainer.getObjectByName('start-light');
-  if (oldStartLight) mazeContainer.remove(oldStartLight);
-
-  const oldSaveItem = mazeContainer.getObjectByName('save-item');
-  if (oldSaveItem) mazeContainer.remove(oldSaveItem);
-
-  const oldFloor = mazeContainer.getObjectByName('floor-mesh');
-  if (oldFloor) mazeContainer.remove(oldFloor);
-
-  // Reset graphic HUD
+  cleanupCurrentLevel();
   updateSavesHUD();
-  
-  isGameActive = true;
-  if (victoryOverlay) {
-    victoryOverlay.classList.add('hidden');
-  }
-  
-  // Reset states
+  victoryOverlay.classList.add('hidden');
   isSaveCollected = false;
-  const oldGates = mazeContainer.getObjectByName('football-gates');
-  if (oldGates) mazeContainer.remove(oldGates);
-  
-  // Clear any remaining floating saves
-  const savesToRemove: THREE.Object3D[] = [];
-  scene.traverse((child) => {
-    if (child.name === 'save-item' && child.parent === scene) {
-      savesToRemove.push(child);
-    }
-  });
-  savesToRemove.forEach(s => scene.remove(s));
-  
+  resetCount = 0;
+  aliveTime = 0;
+  gameTimeLeft = GAME_DURATION_MS / 1000;
+  timerSpan.textContent = String(Math.ceil(gameTimeLeft));
   currentLevelSpan.textContent = String(currentMazeIndex + 1).padStart(2, '0');
   loadMazeAsset();
-  
-  startTimer();
 }
 
 function updateSavesHUD() {
@@ -569,9 +759,11 @@ function collectSave() {
   
   sounds.playVictory();
   
-  // Remove save mesh from mazeContainer instantly
-  mazeContainer.remove(saveMesh);
+  // Remove and release the per-session clone immediately.
+  disposeObject(saveMesh, true);
   saveMesh = null;
+  saveEditorRoot?.removeFromParent();
+  saveEditorRoot = null;
   
   // Update graphic HUD
   updateSavesHUD();
@@ -583,14 +775,14 @@ function collectSave() {
 function completeLevel() {
   if (isTransitioning || !isGameActive) return;
 
-  // Check if we collected all 6 saves!
+  // Check if we collected every configured save.
   if (savesCollected >= totalSavesGoal) {
     endGame(true); // Game Won!
     return;
   }
   
   // Otherwise transition to next level!
-  const nextLevelIndex = (currentMazeIndex + 1) % MAZE_FILES.length;
+  const nextLevelIndex = (currentMazeIndex + 1) % LEVELS.length;
   startTransitionToLevel(nextLevelIndex);
 }
 
@@ -602,6 +794,7 @@ function startTransitionToLevel(nextIndex: number) {
 }
 
 function resetGame() {
+  if (!isGameActive || gameSession.state !== 'playing') return;
   victoryOverlay.classList.add('hidden');
   aliveTime = 0;
   resetCount++;
@@ -652,7 +845,507 @@ function getGeometryBoundingBox(object: THREE.Object3D | null): THREE.Box3 {
   return box;
 }
 
+async function transitionToTeamSelection() {
+  if (experienceScreen !== 'start' || !teamSelection) return;
+  experienceScreen = 'transition';
+  btnStartGame.disabled = true;
+  sounds.init();
+  const teamAssetsReady = teamSelection.preload();
+  startOverlay.classList.add('is-leaving');
 
+  await delay(1_080);
+  if (experienceScreen !== 'transition') return;
+  startOverlay.classList.add('hidden');
+  startOverlay.setAttribute('aria-hidden', 'true');
+  teamSelectionOverlay.classList.remove('hidden', 'is-team-selected', 'is-selection-ready');
+  teamSelectionOverlay.setAttribute('aria-hidden', 'false');
+  requestAnimationFrame(() => teamSelectionOverlay.classList.add('is-visible'));
+  experienceScreen = 'team';
+  ensureSceneEnvironment();
+  await teamAssetsReady;
+  await teamSelection.show(1_200);
+  startRenderLoop();
+}
+
+function handleTeamSelected(team: TeamDefinition) {
+  if (experienceScreen !== 'team') return;
+  selectedTeam = team;
+  teamSelectionOverlay.classList.add('is-team-selected');
+  teamSelectionOverlay.querySelectorAll<HTMLButtonElement>('[data-team]').forEach((button) => {
+    button.classList.toggle('selected', button.dataset.team === team.id);
+    button.disabled = true;
+  });
+}
+
+function handleTeamSelectionReady(team: TeamDefinition) {
+  if (experienceScreen !== 'team' || selectedTeam?.id !== team.id) return;
+  renderer.domElement.classList.add('team-ball-blurred');
+  btnOpenCamera.disabled = false;
+  teamSelectionOverlay.classList.add('is-selection-ready');
+}
+
+async function openPhotoScreen() {
+  if (experienceScreen !== 'team' || !selectedTeam) return;
+  experienceScreen = 'photo';
+  btnOpenCamera.disabled = true;
+  teamSelectionOverlay.classList.add('hidden');
+  teamSelectionOverlay.classList.remove('is-visible');
+  teamSelectionOverlay.setAttribute('aria-hidden', 'true');
+  teamSelection?.hide();
+  renderer.domElement.classList.remove('team-ball-blurred');
+  updateRendererQuality();
+  resetCameraPreview();
+  photoOverlay.classList.remove('hidden');
+  photoOverlay.setAttribute('aria-hidden', 'false');
+  await startCamera();
+}
+
+async function startCamera() {
+  stopCamera();
+  btnCapturePhoto.disabled = true;
+  btnCapturePhoto.textContent = 'СДЕЛАТЬ ФОТО';
+  setCameraStatus('Разрешите доступ к камере в окне браузера', 'loading');
+  try {
+    if (!window.isSecureContext) throw new Error('Камера требует HTTPS-адрес Render.');
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('Камера недоступна в этом браузере.');
+    cameraStream = await requestCameraStream();
+    cameraVideo.srcObject = cameraStream;
+    cameraVideo.muted = true;
+    await cameraVideo.play();
+    await waitForVideoFrame(cameraVideo, 5_000);
+    btnCapturePhoto.disabled = false;
+    setCameraStatus('Покажи 👍 или нажми кнопку', 'hint', 2_600);
+    thumbUpCapture.start(cameraVideo, capturePhoto, handleThumbCaptureState);
+  } catch (error) {
+    stopCamera();
+    const message = error instanceof DOMException && error.name === 'NotAllowedError'
+      ? 'Разрешите доступ к камере в настройках браузера и обновите страницу.'
+      : error instanceof DOMException && error.name === 'NotFoundError'
+        ? 'Камера не найдена. Проверьте подключение камеры.'
+        : error instanceof DOMException && error.name === 'NotReadableError'
+          ? 'Камера занята другим приложением. Закройте его и попробуйте снова.'
+      : error instanceof Error ? error.message : 'Не удалось включить камеру.';
+    setCameraStatus(message, 'error');
+    btnCapturePhoto.textContent = 'ПОВТОРИТЬ КАМЕРУ';
+    btnCapturePhoto.disabled = false;
+  }
+}
+
+function handleCaptureButton() {
+  if (cameraStream) capturePhoto();
+  else void startCamera();
+}
+
+function capturePhoto() {
+  if (
+    photoCaptureInFlight
+    || capturedPhotoDataUrl
+    || !cameraStream
+    || cameraVideo.videoWidth <= 0
+    || cameraVideo.videoHeight <= 0
+  ) return;
+  photoCaptureInFlight = true;
+  void capturePhotoAsync()
+    .catch((error) => {
+      console.error('Photo capture failed:', error);
+      setCameraStatus('Не удалось обработать фото. Попробуйте ещё раз.', 'error');
+      btnCapturePhoto.disabled = false;
+      thumbUpCapture.start(cameraVideo, capturePhoto, handleThumbCaptureState);
+    })
+    .finally(() => {
+      photoCaptureInFlight = false;
+    });
+}
+
+async function capturePhotoAsync() {
+  thumbUpCapture.pause();
+  btnCapturePhoto.disabled = true;
+  const sourceWidth = cameraVideo.videoWidth;
+  const sourceHeight = cameraVideo.videoHeight;
+  const targetAspect = 16 / 9;
+  let cropWidth = sourceWidth;
+  let cropHeight = sourceHeight;
+  let sourceX = 0;
+  let sourceY = 0;
+
+  if (sourceWidth / sourceHeight > targetAspect) {
+    cropWidth = sourceHeight * targetAspect;
+    sourceX = (sourceWidth - cropWidth) / 2;
+  } else {
+    cropHeight = sourceWidth / targetAspect;
+    sourceY = (sourceHeight - cropHeight) / 2;
+  }
+
+  // The generator creates the 4K result; a native 1080p reference preserves
+  // facial detail without blocking the UI on a 2560px synchronous JPEG encode.
+  const outputWidth = Math.min(1_920, Math.round(cropWidth));
+  const outputHeight = Math.round(outputWidth / targetAspect);
+  cameraCapture.width = outputWidth;
+  cameraCapture.height = outputHeight;
+  const context = cameraCapture.getContext('2d');
+  if (!context) return;
+  context.save();
+  context.translate(outputWidth, 0);
+  context.scale(-1, 1);
+  context.drawImage(
+    cameraVideo,
+    sourceX,
+    sourceY,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    outputWidth,
+    outputHeight,
+  );
+  context.restore();
+  capturedPhotoDataUrl = await encodeCanvasAsDataUrl(cameraCapture, 0.9);
+  if (experienceScreen !== 'photo') return;
+  cameraFlash.classList.remove('is-active');
+  void cameraFlash.offsetWidth;
+  cameraFlash.classList.add('is-active');
+  cameraPreview.src = capturedPhotoDataUrl;
+  cameraPreview.classList.remove('hidden');
+  cameraVideo.classList.add('hidden');
+  photoOverlay.classList.add('has-photo');
+  btnCapturePhoto.classList.add('hidden');
+  btnRetakePhoto.classList.remove('hidden');
+  btnConfirmPhoto.classList.remove('hidden');
+  setCameraStatus('', 'hidden');
+}
+
+function encodeCanvasAsDataUrl(canvas: HTMLCanvasElement, quality: number) {
+  return new Promise<string>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error('Browser failed to encode the camera frame.'));
+        return;
+      }
+      const reader = new FileReader();
+      reader.addEventListener('load', () => resolve(String(reader.result)));
+      reader.addEventListener('error', () => reject(reader.error || new Error('Failed to read encoded photo.')));
+      reader.readAsDataURL(blob);
+    }, 'image/jpeg', quality);
+  });
+}
+
+function resetCameraPreview() {
+  capturedPhotoDataUrl = '';
+  cameraPreview.removeAttribute('src');
+  cameraPreview.classList.add('hidden');
+  cameraVideo.classList.remove('hidden');
+  photoOverlay.classList.remove('has-photo');
+  btnCapturePhoto.classList.remove('hidden');
+  btnRetakePhoto.classList.add('hidden');
+  btnConfirmPhoto.classList.add('hidden');
+  btnConfirmPhoto.disabled = false;
+  btnCapturePhoto.disabled = !cameraStream;
+  btnCapturePhoto.textContent = cameraStream ? 'СДЕЛАТЬ ФОТО' : 'ПОВТОРИТЬ КАМЕРУ';
+}
+
+function retakePhoto() {
+  resetCameraPreview();
+  btnCapturePhoto.disabled = !cameraStream;
+  if (cameraStream) {
+    setCameraStatus('Покажи 👍 или нажми кнопку', 'hint', 2_600);
+    thumbUpCapture.start(cameraVideo, capturePhoto, handleThumbCaptureState);
+  }
+}
+
+function confirmPhoto() {
+  if (!capturedPhotoDataUrl || !selectedTeam || experienceScreen !== 'photo') return;
+  btnConfirmPhoto.disabled = true;
+  setCameraStatus('Фото принято', 'hint');
+  stopCamera();
+
+  const photo = capturedPhotoDataUrl;
+  const team = selectedTeam;
+  const abortController = new AbortController();
+  generationAbortController = abortController;
+  void submitTeamGeneration(photo, team, kioskToken, abortController.signal)
+    .then((result) => {
+      window.dispatchEvent(new CustomEvent('team-image-ready', { detail: { ...result, team } }));
+    })
+    .catch((error) => {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        console.error('Team image generation failed:', error);
+      }
+    })
+    .finally(() => {
+      if (generationAbortController === abortController) generationAbortController = null;
+    });
+
+  void enterLabyrinthFlow();
+}
+
+async function enterLabyrinthFlow() {
+  experienceScreen = 'labyrinth';
+  photoOverlay.classList.add('hidden');
+  photoOverlay.setAttribute('aria-hidden', 'true');
+  settingsTrigger.classList.remove('experience-hidden');
+  hideStartScreen();
+  // Clear the last team-ball frame once; the continuous loop resumes only
+  // after the first maze has actually been prepared.
+  renderSceneOnce(false);
+  // Physics and maze assets load while the guest scans the QR code. They are
+  // intentionally absent from the critical start/team/photo path.
+  void ensureGameRuntime().catch((error) => {
+    console.error('Game runtime preload failed:', error);
+    updateConnectionStatus('ОШИБКА ЗАГРУЗКИ ИГРЫ', true);
+  });
+  await openPairing(true);
+}
+
+async function resetExperience(resetServer: boolean) {
+  lifecycleVersion += 1;
+  generationAbortController?.abort();
+  generationAbortController = null;
+  stopCamera();
+  if (resultResetTimer !== null) window.clearTimeout(resultResetTimer);
+  resultResetTimer = null;
+  if (pairingRefreshTimer !== null) window.clearTimeout(pairingRefreshTimer);
+  pairingRefreshTimer = null;
+  experienceScreen = 'start';
+  selectedTeam = null;
+  capturedPhotoDataUrl = '';
+  isGameActive = false;
+  isControllerConnected = false;
+  currentControllerSessionId = null;
+  gameSession.enterAttract();
+  teamSelection?.reset();
+  renderer.domElement.classList.remove('team-ball-blurred');
+  teamSelectionOverlay.classList.add('hidden');
+  teamSelectionOverlay.classList.remove('is-visible', 'is-team-selected', 'is-selection-ready');
+  teamSelectionOverlay.setAttribute('aria-hidden', 'true');
+  photoOverlay.classList.add('hidden');
+  photoOverlay.setAttribute('aria-hidden', 'true');
+  resetCameraPreview();
+  teamSelectionOverlay.querySelectorAll<HTMLButtonElement>('[data-team]').forEach((button) => {
+    button.disabled = false;
+    button.classList.remove('selected');
+  });
+  btnOpenCamera.disabled = true;
+  settingsTrigger.classList.remove('experience-hidden');
+  pairingOverlay.classList.add('hidden');
+  hudOverlay.classList.add('hidden');
+  victoryOverlay.classList.add('hidden');
+  startOverlay.classList.remove('hidden', 'is-leaving');
+  startOverlay.setAttribute('aria-hidden', 'false');
+  btnStartGame.disabled = false;
+  showStartScreen();
+  if (resetServer && socket.connected) {
+    await sendSessionCommand(SESSION_COMMANDS.PAIR).catch((error) => {
+      console.error('Failed to reset server for the next guest:', error);
+    });
+  }
+}
+
+function stopCamera() {
+  thumbUpCapture.stop();
+  cameraStream?.getTracks().forEach((track) => track.stop());
+  cameraStream = null;
+  cameraVideo.srcObject = null;
+  if (cameraStatusTimer !== null) window.clearTimeout(cameraStatusTimer);
+  cameraStatusTimer = null;
+}
+
+async function requestCameraStream() {
+  const preferred: MediaStreamConstraints = {
+    audio: false,
+    video: {
+      facingMode: { ideal: 'user' },
+      width: { ideal: 1_280 },
+      height: { ideal: 720 },
+      aspectRatio: { ideal: 16 / 9 },
+    },
+  };
+  try {
+    return await getUserMediaWithTimeout(preferred, 20_000);
+  } catch (error) {
+    if (error instanceof CameraRequestTimeoutError) throw error;
+    if (
+      error instanceof DOMException
+      && ['NotAllowedError', 'NotFoundError', 'NotReadableError', 'SecurityError'].includes(error.name)
+    ) throw error;
+    return getUserMediaWithTimeout({ audio: false, video: true }, 20_000);
+  }
+}
+
+class CameraRequestTimeoutError extends Error {
+  constructor() {
+    super('Браузер не получил разрешение. Разрешите камеру и нажмите «Повторить камеру».');
+    this.name = 'CameraRequestTimeoutError';
+  }
+}
+
+function getUserMediaWithTimeout(constraints: MediaStreamConstraints, timeoutMs: number) {
+  const request = navigator.mediaDevices.getUserMedia(constraints);
+  return new Promise<MediaStream>((resolve, reject) => {
+    let expired = false;
+    const timeout = window.setTimeout(() => {
+      expired = true;
+      reject(new CameraRequestTimeoutError());
+    }, timeoutMs);
+
+    request.then((stream) => {
+      window.clearTimeout(timeout);
+      if (expired) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      resolve(stream);
+    }, (error) => {
+      window.clearTimeout(timeout);
+      if (!expired) reject(error);
+    });
+  });
+}
+
+function waitForVideoFrame(video: HTMLVideoElement, timeoutMs: number) {
+  if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0) {
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error('Камера подключена, но не передаёт изображение.'));
+    }, timeoutMs);
+    const handleReady = () => {
+      if (video.videoWidth <= 0) return;
+      cleanup();
+      resolve();
+    };
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      video.removeEventListener('loadeddata', handleReady);
+      video.removeEventListener('playing', handleReady);
+      video.removeEventListener('resize', handleReady);
+    };
+    video.addEventListener('loadeddata', handleReady);
+    video.addEventListener('playing', handleReady);
+    video.addEventListener('resize', handleReady);
+  });
+}
+
+function handleThumbCaptureState(state: ThumbCaptureState) {
+  if (experienceScreen !== 'photo' || capturedPhotoDataUrl) return;
+  if (state === 'ready') {
+    setCameraStatus('Покажи 👍 или нажми кнопку', 'hint', 2_600);
+  } else if (state === 'unavailable') {
+    setCameraStatus('Жест недоступен — используй кнопку', 'hint', 3_400);
+  }
+}
+
+function setCameraStatus(
+  message: string,
+  mode: 'loading' | 'hint' | 'error' | 'hidden',
+  autoHideMs = 0,
+) {
+  if (cameraStatusTimer !== null) window.clearTimeout(cameraStatusTimer);
+  cameraStatusTimer = null;
+  cameraStatus.textContent = message;
+  cameraStatus.classList.toggle('is-visible', mode !== 'hidden');
+  cameraStatus.classList.toggle('is-error', mode === 'error');
+  if (autoHideMs > 0) {
+    cameraStatusTimer = window.setTimeout(() => {
+      cameraStatus.classList.remove('is-visible', 'is-error');
+      cameraStatusTimer = null;
+    }, autoHideMs);
+  }
+}
+
+function delay(durationMs: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, durationMs));
+}
+
+function applyCameraView(view: { position: THREE.Vector3; target: THREE.Vector3; fov: number }) {
+  camera.position.copy(view.position);
+  camera.fov = view.fov;
+  camera.up.set(0, 1, 0);
+  camera.lookAt(view.target);
+  camera.updateProjectionMatrix();
+}
+
+const shadowFocus = new THREE.Vector3();
+const shadowViewDirection = new THREE.Vector3();
+const shadowCameraRight = new THREE.Vector3();
+const shadowCameraUp = new THREE.Vector3();
+
+function updateShadowSystem(now: number, forceShadowMap = false) {
+  if (!shadowReceiver || !shadowKeyLight || !camera) return;
+
+  if (experienceScreen === 'labyrinth' && gameSceneEditorRoot?.visible) {
+    gameSceneEditorRoot.getWorldPosition(shadowFocus);
+  } else {
+    shadowFocus.set(0, -0.15, 0);
+  }
+
+  camera.getWorldDirection(shadowViewDirection).normalize();
+  const contentRadius = experienceScreen === 'labyrinth'
+    ? Math.max(0, Math.max(mazeSize.x, mazeSize.z) * 0.55)
+    : 1.8;
+  const receiverDistance = shadowSettings.distanceBehindFocus + contentRadius;
+  shadowReceiver.position.copy(shadowFocus).addScaledVector(shadowViewDirection, receiverDistance);
+  shadowReceiver.quaternion.copy(camera.quaternion);
+  shadowReceiver.scale.setScalar(shadowSettings.size);
+  shadowReceiver.material.opacity = shadowSettings.opacity;
+
+  shadowCameraRight.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+  shadowCameraUp.set(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+  shadowKeyLight.position.copy(camera.position)
+    .addScaledVector(shadowCameraRight, shadowSettings.lightOffsetX)
+    .addScaledVector(shadowCameraUp, shadowSettings.lightOffsetY);
+  shadowKeyLight.intensity = shadowSettings.lightIntensity;
+  shadowKeyLight.target.position.copy(shadowFocus);
+  shadowKeyLight.target.updateMatrixWorld();
+
+  // Fit the 2048 map tightly around the visible content. This keeps shadows
+  // crisp on a two-metre 4K display without increasing texture resolution.
+  const shadowExtent = experienceScreen === 'labyrinth'
+    ? Math.max(8, contentRadius * 1.35)
+    : 3.4;
+  if (Math.abs(shadowExtent - lastShadowExtent) > 0.05) {
+    const shadowCamera = shadowKeyLight.shadow.camera;
+    shadowCamera.left = -shadowExtent;
+    shadowCamera.right = shadowExtent;
+    shadowCamera.top = shadowExtent;
+    shadowCamera.bottom = -shadowExtent;
+    shadowCamera.updateProjectionMatrix();
+    lastShadowExtent = shadowExtent;
+    forceShadowMap = true;
+  }
+
+  // Animated objects still receive live shadows, but 30 shadow updates per
+  // second are visually smooth while cutting the most expensive pass in half.
+  const shadowInterval = experienceScreen === 'labyrinth' && !isGameActive ? 66 : 33;
+  if (forceShadowMap || now >= nextShadowMapUpdateAt) {
+    renderer.shadowMap.needsUpdate = true;
+    nextShadowMapUpdateAt = now + shadowInterval;
+  }
+}
+
+function markShadowMapDirty() {
+  nextShadowMapUpdateAt = 0;
+}
+
+function enableAutomaticMeshShadows() {
+  scene.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    if (object === shadowReceiver || object.userData.ignoreShadow) {
+      object.castShadow = false;
+      return;
+    }
+    const materials = (Array.isArray(object.material) ? object.material : [object.material])
+      .filter(Boolean);
+    const invisible = materials.length > 0 && materials.every((material) => (
+      !material.visible
+      || material.colorWrite === false
+      || (material.transparent && material.opacity <= 0.001)
+    ));
+    object.castShadow = !invisible;
+    object.receiveShadow = true;
+  });
+}
 
 function showStartScreen() {
   isStartScreenActive = true;
@@ -665,9 +1358,9 @@ function showStartScreen() {
   const mainLight = scene.getObjectByName('main-light');
   if (mainLight) mainLight.visible = false;
   
-  camera.position.set(0, 0.5, 10);
-  camera.lookAt(0, 0.5, 0);
-  camera.up.set(0, 1, 0);
+  applyCameraView(startCameraView);
+  updateRendererQuality();
+  renderSceneOnce(false);
 }
 
 function hideStartScreen() {
@@ -680,25 +1373,71 @@ function hideStartScreen() {
   
   const mainLight = scene.getObjectByName('main-light');
   if (mainLight) mainLight.visible = true;
+  if (mazeGroup) updateCameraPosition();
+}
+
+async function ensureGameRuntime() {
+  if (gameRuntimePromise) return gameRuntimePromise;
+  gameRuntimePromise = (async () => {
+    const rapierReady = import('@dimforge/rapier3d-compat').then(async (module) => {
+      RAPIER = module.default;
+      await RAPIER.init();
+    });
+    await Promise.all([rapierReady, assetManager.preload()]);
+    physicsWorld = new RAPIER.World({ x: 0, y: -35, z: 0 });
+    debugLog(`Game runtime ready: ${LEVELS.length} mazes, props and Rapier.`);
+  })();
+  return gameRuntimePromise;
+}
+
+function ensureSceneEnvironment() {
+  if (environmentReady) return;
+  environmentReady = true;
+  const pmremGenerator = new THREE.PMREMGenerator(renderer);
+  pmremGenerator.compileEquirectangularShader();
+  const envScene = new THREE.Scene();
+  const panelGeo = new THREE.BoxGeometry(100, 100, 1);
+  const panelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const panelPositions = [
+    [-300, 150, 0],
+    [300, 150, 0],
+    [0, 400, -200],
+    [0, 150, 300],
+  ] as const;
+  for (const [x, y, z] of panelPositions) {
+    const panel = new THREE.Mesh(panelGeo, panelMat);
+    panel.position.set(x, y, z);
+    panel.lookAt(0, 0, 0);
+    envScene.add(panel);
+  }
+  const envTarget = pmremGenerator.fromScene(envScene);
+  scene.environment = envTarget.texture;
+  pmremGenerator.dispose();
+  panelGeo.dispose();
+  panelMat.dispose();
 }
 
 
 
 // Initialize Graphics & Physics
 async function init() {
-  // 1. Initialize Rapier Physics WASM
-  await RAPIER.init();
-  physicsWorld = new RAPIER.World({ x: 0.0, y: -35.0, z: 0.0 });
-
-  // 2. Set up Three.js Scene
+  // Set up the light start/team runtime first. Rapier and maze assets are
+  // loaded only after the photo step, while the guest scans the QR code.
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xffffff); // White background
 
-  clock = new THREE.Clock();
+  // A stable editor root keeps layout adjustments separate from gyro animation.
+  gameSceneEditorRoot = new THREE.Group();
+  gameSceneEditorRoot.name = 'game-scene-editor-root';
+  gameSceneEditorRoot.userData.editorId = 'game-scene';
+  gameSceneEditorRoot.userData.editorLabel = 'Вся игровая 3D-сцена';
+  scene.add(gameSceneEditorRoot);
 
   // Create visual container group centered at (0, 0, 0)
   mazeContainer = new THREE.Group();
-  scene.add(mazeContainer);
+  mazeContainer.name = 'maze-tilt-container';
+  mazeContainer.userData.ignoreEditor = true;
+  gameSceneEditorRoot.add(mazeContainer);
 
   // Camera setup optimized for 9:16 layout
   camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -710,42 +1449,10 @@ async function init() {
     powerPreference: "high-performance"
   });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit to 2x for performance in 4K
+  updateRendererQuality();
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-  // 1. Procedural HDRI Environment Map for reflections only
-  const pmremGenerator = new THREE.PMREMGenerator(renderer);
-  pmremGenerator.compileEquirectangularShader();
-
-  const envScene = new THREE.Scene();
-  const panelGeo = new THREE.BoxGeometry(100, 100, 1);
-  const panelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-
-  // Add bright light softbox panels for premium glossy metallic reflections
-  const panel1 = new THREE.Mesh(panelGeo, panelMat);
-  panel1.position.set(-300, 150, 0);
-  panel1.lookAt(0, 0, 0);
-  envScene.add(panel1);
-
-  const panel2 = new THREE.Mesh(panelGeo, panelMat);
-  panel2.position.set(300, 150, 0);
-  panel2.lookAt(0, 0, 0);
-  envScene.add(panel2);
-
-  const panel3 = new THREE.Mesh(panelGeo, panelMat);
-  panel3.position.set(0, 400, -200);
-  panel3.lookAt(0, 0, 0);
-  envScene.add(panel3);
-
-  const panel4 = new THREE.Mesh(panelGeo, panelMat);
-  panel4.position.set(0, 150, 300);
-  panel4.lookAt(0, 0, 0);
-  envScene.add(panel4);
-
-  const envTarget = pmremGenerator.fromScene(envScene);
-  scene.environment = envTarget.texture;
-  pmremGenerator.dispose();
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.shadowMap.autoUpdate = false;
 
   // 2. Add Studio Lights (increased intensities so everything is well-lit from all sides)
   // Ambient fill light for base brightness
@@ -755,18 +1462,41 @@ async function init() {
   // Key Light (main light casting shadows with optimized frustum bounds)
   const mainLight = new THREE.DirectionalLight(0xffffff, 1.8);
   mainLight.position.set(20, 50, 10);
-  mainLight.castShadow = true;
-  mainLight.shadow.mapSize.width = 2048;
-  mainLight.shadow.mapSize.height = 2048;
-  mainLight.shadow.bias = -0.0005;
-  mainLight.shadow.camera.left = -15;
-  mainLight.shadow.camera.right = 15;
-  mainLight.shadow.camera.top = 15;
-  mainLight.shadow.camera.bottom = -15;
-  mainLight.shadow.camera.near = 0.5;
-  mainLight.shadow.camera.far = 120;
   mainLight.name = 'main-light';
   scene.add(mainLight);
+
+  // A camera-facing rear plane catches shadows in every scene, including top-down game views.
+  const shadowMaterial = new THREE.ShadowMaterial({
+    color: 0x080245,
+    opacity: shadowSettings.opacity,
+    transparent: true,
+    depthWrite: false,
+  });
+  shadowReceiver = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), shadowMaterial);
+  shadowReceiver.name = 'back-shadow-plane';
+  shadowReceiver.receiveShadow = true;
+  shadowReceiver.castShadow = false;
+  shadowReceiver.frustumCulled = false;
+  shadowReceiver.renderOrder = -20;
+  shadowReceiver.userData.ignoreShadow = true;
+  scene.add(shadowReceiver);
+
+  // This light follows the active camera, so shadows always travel toward the rear plane.
+  shadowKeyLight = new THREE.DirectionalLight(0xffffff, shadowSettings.lightIntensity);
+  shadowKeyLight.name = 'shadow-key-light';
+  shadowKeyLight.castShadow = true;
+  shadowKeyLight.shadow.mapSize.set(2048, 2048);
+  shadowKeyLight.shadow.bias = -0.00035;
+  shadowKeyLight.shadow.normalBias = 0.035;
+  shadowKeyLight.shadow.camera.left = -24;
+  shadowKeyLight.shadow.camera.right = 24;
+  shadowKeyLight.shadow.camera.top = 24;
+  shadowKeyLight.shadow.camera.bottom = -24;
+  shadowKeyLight.shadow.camera.near = 0.5;
+  shadowKeyLight.shadow.camera.far = 160;
+  shadowKeyLight.target.name = 'shadow-key-target';
+  shadowKeyLight.target.userData.ignoreEditor = true;
+  scene.add(shadowKeyLight, shadowKeyLight.target);
 
   // Fill Light (soft light from the opposite side to brighten shadows)
   const fillLight = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -786,86 +1516,56 @@ async function init() {
   frontLight.name = 'front-light';
   scene.add(frontLight);
 
-  // Load Save 3D asset template
-  const fbxLoader = new FBXLoader();
-  fbxLoader.load('/source/save.fbx', (fbx) => {
-    saveTemplate = fbx;
-    saveTemplate.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-    debugLog('Loaded save.fbx template successfully.');
-  }, undefined, (err) => {
-    console.error('Error loading save.fbx template:', err);
+  teamSelection = new TeamSelection3D({
+    scene,
+    camera,
+    canvas: renderer.domElement,
+    onSelect: handleTeamSelected,
+    onSelectionReady: handleTeamSelectionReady,
+  });
+  teamSelection.setCameraView(teamCameraView);
+
+  btnStartGame.addEventListener('click', () => void transitionToTeamSelection());
+  teamSelectionOverlay.querySelectorAll<HTMLButtonElement>('[data-team]').forEach((button) => {
+    const teamId = button.dataset.team || '';
+    button.addEventListener('click', () => teamSelection?.select(teamId));
+    button.addEventListener('pointerenter', () => teamSelection?.hover(teamId));
+    button.addEventListener('pointerleave', () => teamSelection?.hover(null));
+    button.addEventListener('focus', () => teamSelection?.hover(teamId));
+    button.addEventListener('blur', () => teamSelection?.hover(null));
+  });
+  btnOpenCamera.addEventListener('click', () => void openPhotoScreen());
+  btnCapturePhoto.addEventListener('click', handleCaptureButton);
+  btnRetakePhoto.addEventListener('click', retakePhoto);
+  btnConfirmPhoto.addEventListener('click', confirmPhoto);
+  window.addEventListener('beforeunload', () => {
+    stopCamera();
+    generationAbortController?.abort();
   });
 
-
-
-  // Load football.glb template
-  const gltfLoader = new GLTFLoader();
-  gltfLoader.load('/source/football.glb', (gltf) => {
-    footballTemplate = gltf.scene;
-    footballTemplate.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-    debugLog('Loaded football.glb template successfully.');
-  }, undefined, (err) => {
-    console.error('Error loading football.glb template:', err);
-  });
-
-
-
-  // Bind 2D Start Button Click Event
-  btnStartGame.addEventListener('click', () => {
-    hideStartScreen();
-    startOverlay.classList.add('hidden');
-    
-    if (isControllerConnected) {
-      pairingOverlay.classList.add('hidden');
-      hudOverlay.classList.remove('hidden');
-      sounds.init();
-      startNewGame();
-    } else {
-      pairingOverlay.classList.remove('hidden');
-      fetchServerInfo();
-    }
-  });
-
-  // Load the Maze asset (they just go in order from 01 to 06)
   currentLevelSpan.textContent = String(currentMazeIndex + 1).padStart(2, '0');
-  loadMazeAsset();
-
-
-
-  // Show Start Screen immediately on launch
   showStartScreen();
-
-  // Window Resize
   window.addEventListener('resize', onWindowResize);
+
+  // FBX balls are the only non-critical background preload. Starting it after
+  // the first paint keeps the button responsive even on a cold Render load.
+  const preloadTeamAssets = () => {
+    ensureSceneEnvironment();
+    void teamSelection?.preload()
+      .then(() => {
+        enableAutomaticMeshShadows();
+        sceneEditorPanel?.applyStoredValues();
+        debugLog(`Preloaded ${TEAMS.length} team balls.`);
+      })
+      .catch((error) => console.error('Team ball preload failed:', error));
+  };
+  window.requestIdleCallback(preloadTeamAssets, { timeout: 1_200 });
 }
 
 function loadMazeAsset() {
   isLevelLoading = true;
-  activeLoadId++;
-  const thisLoadId = activeLoadId;
-  if (mazeContainer) {
-    mazeContainer.quaternion.set(0, 0, 0, 1);
-  }
-  const loader = new FBXLoader();
-  const v = Date.now();
-  const mazeFile = MAZE_FILES[currentMazeIndex];
-
-  // Load only the normal texture map (avoiding 8MB+ bandwidth waste of unused textures)
-  const textureLoader = new THREE.TextureLoader();
-  const normalMap = textureLoader.load('/textures/DefaultMaterial_Normal_OpenGL.png');
-
-  normalMap.wrapS = THREE.RepeatWrapping;
-  normalMap.wrapT = THREE.RepeatWrapping;
+  mazeContainer.quaternion.set(0, 0, 0, 1);
+  const normalMap = assetManager.getNormalMap();
 
   mazeMaterial = new THREE.MeshPhysicalMaterial({
     color: 0x716cff, // #716cff (requested color)
@@ -895,21 +1595,15 @@ function loadMazeAsset() {
     opacity: 1.0
   });
 
-  loader.load(mazeFile + '?v=' + v, (fbx) => {
-    if (thisLoadId !== activeLoadId) {
-      debugLog('Ignoring superseded maze load callback.');
-      return;
-    }
-    mazeGroup = fbx;
-    mazeContainer.add(mazeGroup);
-
-    debugLog('Loaded labyrinth FBX successfully.');
-
-    if (mazeGroup) {
-      // Apply PBR material to all meshes (FBX has no embedded textures)
-      mazeGroup.traverse((child) => {
+  mazeGroup = assetManager.cloneMaze(currentMazeIndex);
+  mazeEditorRoot = new THREE.Group();
+  mazeEditorRoot.name = 'maze-editor-root';
+  mazeEditorRoot.userData.editorId = 'game-maze';
+  mazeEditorRoot.userData.editorLabel = 'Лабиринт';
+  mazeEditorRoot.add(mazeGroup);
+  mazeContainer.add(mazeEditorRoot);
+  mazeGroup.traverse((child) => {
       const nameLower = child.name.toLowerCase();
-      // Hide legacy start/finish placeholders if any remain in legacy files
       if (nameLower === 'start' || nameLower === 'finish') {
         child.visible = false;
         if (child instanceof THREE.Mesh) {
@@ -919,16 +1613,8 @@ function loadMazeAsset() {
       }
 
       if (child instanceof THREE.Mesh) {
-        if (!child.geometry.boundingBox) {
-          child.geometry.computeBoundingBox();
-        }
-        const size = new THREE.Vector3();
-        child.geometry.boundingBox.getSize(size);
-        debugLog(`Mesh "${child.name}": visible=${child.visible} scale=(${child.scale.x},${child.scale.y},${child.scale.z}) pos=(${child.position.x},${child.position.y},${child.position.z}) size=(${size.x.toFixed(2)},${size.y.toFixed(2)},${size.z.toFixed(2)})`);
-
-        // Force visibility to true in case it was exported as hidden from Blender
+        if (!child.geometry.boundingBox) child.geometry.computeBoundingBox();
         child.visible = true;
-
         const isFloor = nameLower.includes('floor') || 
                         nameLower.includes('ground') || 
                         nameLower.includes('plane') || 
@@ -940,62 +1626,37 @@ function loadMazeAsset() {
         child.castShadow = true;
         child.receiveShadow = true;
       }
-    });
-    }
-
-    // If we are transitioning, start level fully transparent
-    if (isTransitioning) {
-      mazeMaterial.opacity = 0.0;
-      floorMaterial.opacity = 0.0;
-    } else {
-      mazeMaterial.opacity = 0.6;
-      floorMaterial.opacity = 1.0;
-    }
-
-    // 1. Get original size of the mesh
-    mazeBoundingBox = getGeometryBoundingBox(mazeGroup);
-    mazeBoundingBox.getSize(mazeSize);
-    
-    // Scale maze to a realistic size (12.0 meters wide/deep)
-    const targetWidth = 12.0;
-    const maxDim = Math.max(mazeSize.x, mazeSize.z);
-    const scaleFactor = targetWidth / maxDim;
-    
-    mazeGroup.scale.set(scaleFactor, scaleFactor, scaleFactor);
-    // Force matrix update immediately after scaling to ensure getGeometryBoundingBox computes scaled sizes!
-    mazeGroup.updateMatrix();
-    mazeGroup.updateMatrixWorld(true);
-
-    debugLog(`Original size: ${maxDim.toFixed(1)}, Scaling factor: ${scaleFactor.toFixed(5)}`);
-
-    // Center the model group and position camera
-    positionCamera();
-
-    // Create Physics representation (Static fixed body for stable collisions)
-    buildPhysicsMaze();
-
-    // Spawn Ball and Start/Finish points
-    spawnGameElements();
-
-    if (isTransitioning) {
-      transitionDir = -1; // Fade in
-      transitionTime = 0.3;
-    }
-
-    // Start animation loop (only once)
-    if (!isAnimating) {
-      isAnimating = true;
-      animate();
-    }
-  }, (xhr) => {
-    if (xhr.total > 0) {
-      console.log((xhr.loaded / xhr.total * 100) + '% loaded');
-    }
-  }, (error) => {
-    console.error('An error happened loading the FBX model:', error);
-    const msg = error instanceof Error ? error.message : String(error);
-    debugLog('Error loading FBX model: ' + msg);
   });
+
+  if (isTransitioning) {
+    mazeMaterial.opacity = 0.0;
+    floorMaterial.opacity = 0.0;
+  } else {
+    mazeMaterial.opacity = 0.6;
+    floorMaterial.opacity = 1.0;
+  }
+
+  mazeBoundingBox = getGeometryBoundingBox(mazeGroup);
+  mazeBoundingBox.getSize(mazeSize);
+  const maxDim = Math.max(mazeSize.x, mazeSize.z);
+  if (!Number.isFinite(maxDim) || maxDim <= 0) throw new Error(`Invalid maze bounds for level ${currentMazeIndex}`);
+  const scaleFactor = 12.0 / maxDim;
+  mazeGroup.scale.set(scaleFactor, scaleFactor, scaleFactor);
+  mazeGroup.updateMatrix();
+  mazeGroup.updateMatrixWorld(true);
+
+  debugLog(`Prepared maze ${LEVELS[currentMazeIndex].id}; scale=${scaleFactor.toFixed(5)}.`);
+  positionCamera();
+  buildPhysicsMaze();
+  spawnGameElements();
+
+  if (isTransitioning) {
+    transitionDir = -1;
+    transitionTime = 0.3;
+  }
+  enableAutomaticMeshShadows();
+  markShadowMapDirty();
+  startRenderLoop();
 }
 
 // Recalculates camera coordinates based on cameraAngleDeg
@@ -1005,7 +1666,7 @@ function updateCameraPosition() {
   const angleRad = cameraAngleDeg * Math.PI / 180;
   
   // Adjust distance for vertical screens (aspect < 1.0) so maze fits horizontally
-  let camDistance = distance * 1.9;
+  let camDistance = distance * gameCameraDistanceMultiplier;
   if (camera.aspect < 1.0) {
     camDistance = camDistance / camera.aspect;
   }
@@ -1019,10 +1680,11 @@ function updateCameraPosition() {
   }
   
   // Raise camera Y coordinate and apply sceneYShift for vertical screen position
-  camera.position.set(0, cameraHeight + targetY - sceneYShift, targetZ);
+  camera.position.set(gameCameraX, cameraHeight + targetY - sceneYShift, targetZ);
+  camera.fov = gameCameraFov;
   
   // Look slightly above the maze center - sceneYShift
-  const targetLookAt = new THREE.Vector3(0, mazeYOffset + 1.0 - sceneYShift, 0);
+  const targetLookAt = new THREE.Vector3(0, mazeYOffset + gameCameraTargetY - sceneYShift, 0);
   
   camera.lookAt(targetLookAt);
   
@@ -1058,11 +1720,8 @@ function positionCamera() {
   
   camera.far = Math.max(1000, distance * 10.0);
   
-  // Automatically adjust cameraHeight to match new level geometry size
-  cameraHeight = distance * 0.40;
-  
-  // Sync HTML inputs with new geometry settings
-  updateSlidersUI();
+  // Automatically choose a height only until the operator stores a manual value.
+  if (cameraHeight === 0.0) cameraHeight = distance * 0.40;
   
   // Position camera based on our adjustable settings
   updateCameraPosition();
@@ -1121,16 +1780,17 @@ function buildPhysicsMaze() {
 
       child.updateMatrixWorld(true);
       const tempMatrix = child.matrixWorld.clone();
+      const transformedVertex = new THREE.Vector3();
 
       for (let i = 0; i < posAttr.count; i++) {
         const vx = originalVertices[i * 3];
         const vy = originalVertices[i * 3 + 1];
         const vz = originalVertices[i * 3 + 2];
 
-        const v = new THREE.Vector3(vx, vy, vz).applyMatrix4(tempMatrix);
-        vertices[i * 3] = v.x;
-        vertices[i * 3 + 1] = v.y;
-        vertices[i * 3 + 2] = v.z;
+        transformedVertex.set(vx, vy, vz).applyMatrix4(tempMatrix);
+        vertices[i * 3] = transformedVertex.x;
+        vertices[i * 3 + 1] = transformedVertex.y;
+        vertices[i * 3 + 2] = transformedVertex.z;
       }
 
       let indices: Uint32Array;
@@ -1190,7 +1850,7 @@ function spawnGameElements() {
   );
 
   // Position finish Golden Save template using the custom default coordinates
-  const finishCoord = DEFAULT_SAVE_COORDS[currentMazeIndex];
+  const finishCoord = LEVELS[currentMazeIndex]?.save;
   if (finishCoord) {
     finishPos.set(finishCoord.x, floorTopY + 0.03 + 0.1, finishCoord.z);
   } else {
@@ -1203,8 +1863,9 @@ function spawnGameElements() {
   }
 
   // 1. Visual representation of the Ball (Cloned GLB Football model or holographic sphere fallback)
-  if (footballTemplate) {
-    ballMesh = footballTemplate.clone();
+  const footballClone = assetManager.cloneFootball();
+  if (footballClone) {
+    ballMesh = footballClone;
     
     // Normalize football size to fit the physics ballRadius * 2
     const ballBox = getGeometryBoundingBox(ballMesh);
@@ -1220,14 +1881,11 @@ function spawnGameElements() {
         child.receiveShadow = true;
         if (child.material) {
           if (Array.isArray(child.material)) {
-            child.material = child.material.map((mat) => {
-              const cloned = mat.clone();
-              cloned.transparent = true;
-              cloned.opacity = isTransitioning ? 0.0 : 1.0;
-              return cloned;
+            child.material.forEach((material) => {
+              material.transparent = true;
+              material.opacity = isTransitioning ? 0.0 : 1.0;
             });
           } else {
-            child.material = child.material.clone();
             child.material.transparent = true;
             child.material.opacity = isTransitioning ? 0.0 : 1.0;
           }
@@ -1248,7 +1906,12 @@ function spawnGameElements() {
     ballMesh.castShadow = true;
     ballMesh.receiveShadow = true;
   }
-  mazeContainer.add(ballMesh);
+  ballEditorRoot = new THREE.Group();
+  ballEditorRoot.name = 'game-ball-editor-root';
+  ballEditorRoot.userData.editorId = 'game-ball';
+  ballEditorRoot.userData.editorLabel = 'Игровой мяч';
+  ballEditorRoot.add(ballMesh);
+  mazeContainer.add(ballEditorRoot);
 
   // 2. Physics representation of the Ball (Dynamic sphere)
   const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic()
@@ -1265,8 +1928,9 @@ function spawnGameElements() {
   physicsWorld.createCollider(ballColliderDesc, ballBody);
 
   // 3. Spawn Save Item directly at finishPos
-  if (saveTemplate) {
-    saveMesh = saveTemplate.clone();
+  const saveClone = assetManager.cloneSave();
+  if (saveClone) {
+    saveMesh = saveClone;
     saveMesh.name = 'save-item';
     if (customSaveCoordinates[currentMazeIndex]) {
       saveMesh.position.set(
@@ -1295,14 +1959,11 @@ function spawnGameElements() {
         child.receiveShadow = true;
         if (child.material) {
           if (Array.isArray(child.material)) {
-            child.material = child.material.map((mat) => {
-              const cloned = mat.clone();
-              cloned.transparent = true;
-              cloned.opacity = isTransitioning ? 0.0 : 1.0;
-              return cloned;
+            child.material.forEach((material) => {
+              material.transparent = true;
+              material.opacity = isTransitioning ? 0.0 : 1.0;
             });
           } else {
-            child.material = child.material.clone();
             child.material.transparent = true;
             child.material.opacity = isTransitioning ? 0.0 : 1.0;
           }
@@ -1310,7 +1971,12 @@ function spawnGameElements() {
       }
     });
 
-    mazeContainer.add(saveMesh);
+    saveEditorRoot = new THREE.Group();
+    saveEditorRoot.name = 'save-editor-root';
+    saveEditorRoot.userData.editorId = 'game-save';
+    saveEditorRoot.userData.editorLabel = 'Сейв';
+    saveEditorRoot.add(saveMesh);
+    mazeContainer.add(saveEditorRoot);
   }
 
   // Glowing pulse light at finish
@@ -1350,38 +2016,89 @@ function spawnGameElements() {
 
 
 
-  // Expose to window for real-time console debugging
-  (window as any).physicsWorld = physicsWorld;
-  (window as any).ballBody = ballBody;
-  (window as any).ballMesh = ballMesh;
-  (window as any).mazeGroup = mazeGroup;
-  (window as any).startPos = startPos;
-  (window as any).finishPos = finishPos;
+  if (import.meta.env.DEV) {
+    Object.assign(window, { physicsWorld, ballBody, ballMesh, mazeGroup, startPos, finishPos });
+  }
+
+  sceneEditorPanel?.applyStoredValues();
 }
 
 function onWindowResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
+  updateRendererQuality();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  if (isStartScreenActive) {
-    camera.position.set(0, 0.5, 10);
-    camera.lookAt(0, 0.5, 0);
-    camera.up.set(0, 1, 0);
+  if (experienceScreen === 'team') {
+    teamSelection?.resize();
+    markShadowMapDirty();
+    startRenderLoop();
+  } else if (isStartScreenActive) {
+    applyCameraView(startCameraView);
+    renderSceneOnce(false);
   } else {
     positionCamera();
+    markShadowMapDirty();
+    startRenderLoop();
   }
 }
 
-// Game loop
-function animate() {
+function shouldRenderWebGl() {
+  return experienceScreen === 'team' || experienceScreen === 'labyrinth';
+}
+
+function startRenderLoop() {
+  if (isAnimating || !shouldRenderWebGl()) return;
+  updateRendererQuality();
+  lastFrameAt = performance.now();
+  isAnimating = true;
   requestAnimationFrame(animate);
+}
 
-  const dt = clock.getDelta();
+function renderSceneOnce(updateShadows = true) {
+  if (!renderer || !scene || !camera) return;
+  if (updateShadows) updateShadowSystem(performance.now(), true);
+  renderer.render(scene, camera);
+}
 
+// Game loop
+function animate(now: number) {
+  if (!shouldRenderWebGl()) {
+    isAnimating = false;
+    return;
+  }
 
+  // Pairing, countdown, pause and result screens keep a high-quality 3D
+  // background at 30 FPS; active play and floating team balls remain 60 FPS.
+  if (experienceScreen === 'labyrinth' && !isGameActive && now - lastFrameAt < 33) {
+    requestAnimationFrame(animate);
+    return;
+  }
 
-
-
+  const dt = Math.min(0.05, Math.max(0, (now - lastFrameAt) / 1_000));
+  lastFrameAt = now;
+  teamSelection?.update(now);
+  const sessionTick = gameSession.tick(now);
+  if (gameSession.state === 'countdown') {
+    const countdown = Math.max(1, Math.ceil(sessionTick.countdownMs / 1000));
+    setTextIfChanged(timerSpan, String(countdown));
+    updateConnectionStatus(`СТАРТ ЧЕРЕЗ ${countdown}`);
+    if (sessionTick.countdownCompleted && gameSession.startPlaying(now)) {
+      isGameActive = true;
+      gameTimeLeft = GAME_DURATION_MS / 1000;
+      setTextIfChanged(timerSpan, String(Math.ceil(gameTimeLeft)));
+      updateConnectionStatus('СМАРТФОН АКТИВЕН');
+      void sendSessionCommand(SESSION_COMMANDS.PLAYING).catch((error) => {
+        console.error('Server rejected game start:', error);
+        void openPairing(true);
+      });
+    }
+  } else if (gameSession.state === 'playing') {
+    gameTimeLeft = sessionTick.remainingMs / 1000;
+    setTextIfChanged(timerSpan, String(Math.ceil(gameTimeLeft)));
+    if (sessionTick.timedOut) endGame(false);
+  } else if (gameSession.state === 'paused') {
+    setTextIfChanged(timerSpan, String(Math.ceil(sessionTick.remainingMs / 1000)));
+  }
   // 3. Normal active Save Mesh Hover rotation in the level
   if (saveMesh && saveMesh.parent === mazeContainer) {
     saveMesh.rotation.y += 2.99 * dt;
@@ -1536,7 +2253,8 @@ function animate() {
   }
 
   if (physicsWorld && ballBody && ballMesh) {
-    if (isLevelLoading || isStartScreenActive) {
+    const simulationActive = isGameActive && gameSession.state === 'playing' && !isLevelLoading && !isStartScreenActive;
+    if (!simulationActive) {
       // Keep everything flat and unrotated during level build
       currentPitch = 0;
       currentRoll = 0;
@@ -1599,20 +2317,25 @@ function animate() {
       const visualPitch = currentPitch * maxTiltAngle;
       const visualRoll = -currentRoll * maxTiltAngle;
       const visualYaw = currentYaw; 
-      const q = new THREE.Quaternion().setFromEuler(
-        new THREE.Euler(visualPitch, visualYaw, visualRoll, 'YXZ')
-      );
+      frameMazeEuler.set(visualPitch, visualYaw, visualRoll, 'YXZ');
+      frameMazeRotation.setFromEuler(frameMazeEuler);
 
       if (mazeContainer) {
-        mazeContainer.quaternion.copy(q);
+        mazeContainer.quaternion.copy(frameMazeRotation);
       }
     }
 
-    // 4. Step Physics simulation with fixed timestep accumulator
-    physicsAccumulator = Math.min(physicsAccumulator + dt, PHYSICS_TIMESTEP * MAX_PHYSICS_STEPS_PER_FRAME);
-    while (physicsAccumulator >= PHYSICS_TIMESTEP) {
-      physicsWorld.step();
-      physicsAccumulator -= PHYSICS_TIMESTEP;
+    // 4. Step physics only while a validated controller owns an active session.
+    if (simulationActive) {
+      physicsAccumulator = Math.min(physicsAccumulator + dt, PHYSICS_TIMESTEP * MAX_PHYSICS_STEPS_PER_FRAME);
+      while (physicsAccumulator >= PHYSICS_TIMESTEP) {
+        physicsWorld.step();
+        physicsAccumulator -= PHYSICS_TIMESTEP;
+      }
+    } else {
+      physicsAccumulator = 0;
+      ballBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      ballBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
 
     // 5. Sync Ball graphics
@@ -1624,12 +2347,12 @@ function animate() {
 
     // 6. Update audio based on velocity
     const linVel = ballBody.linvel();
-    const velVec = new THREE.Vector3(linVel.x, linVel.y, linVel.z);
-    const speed = velVec.length();
+    frameVelocity.set(linVel.x, linVel.y, linVel.z);
+    const speed = simulationActive ? frameVelocity.length() : 0;
 
     sounds.updateRolling(speed);
 
-    if (speed > 0.1) {
+    if (simulationActive && speed > 0.1) {
       aliveTime += dt;
       if (aliveTime > 3.0) {
         resetCount = 0;
@@ -1638,44 +2361,52 @@ function animate() {
       aliveTime = 0;
     }
 
-    // Collision thuds
-    const acceleration = lastVelocity.clone().sub(velVec);
-    const deltaV = acceleration.length();
-    
-    if (deltaV > 1.2) { 
-      sounds.playImpact(deltaV * 2.0);
-    }
-    lastVelocity.copy(velVec);
+    if (simulationActive) {
+      frameAcceleration.copy(lastVelocity).sub(frameVelocity);
+      const deltaV = frameAcceleration.length();
+      if (deltaV > 1.2) sounds.playImpact(deltaV * 2.0);
+      lastVelocity.copy(frameVelocity);
 
-    // 7. Check out-of-bounds drop
-    const dropLimit = mazeBoundingBox.min.y - Math.max(2.0, mazeSize.y * 1.5);
-    if (ballPos.y < dropLimit) {
-      debugLog(`Ball fell below threshold (${ballPos.y.toFixed(2)} < ${dropLimit.toFixed(2)}). Resetting...`);
-      resetGame();
-    }
-
-    // 8. Check Win / Collection conditions
-    const ballWorldPos = new THREE.Vector3(ballPos.x, ballPos.y, ballPos.z);
-    
-    // Save checkpoint collection check
-    if (!isSaveCollected && saveMesh) {
-      const ballPosXZ = new THREE.Vector2(ballWorldPos.x, ballWorldPos.z);
-      const savePosXZ = new THREE.Vector2(saveMesh.position.x, saveMesh.position.z);
-      const distToSave = ballPosXZ.distanceTo(savePosXZ);
-      
-      if (distToSave < (ballRadius + (ballRadius * 1.6) * 0.8) && isGameActive && !isTransitioning) {
-        collectSave();
+      const dropLimit = mazeBoundingBox.min.y - Math.max(2.0, mazeSize.y * 1.5);
+      if (ballPos.y < dropLimit) {
+        debugLog(`Ball fell below threshold (${ballPos.y.toFixed(2)} < ${dropLimit.toFixed(2)}). Resetting...`);
+        resetGame();
       }
+
+      if (!isSaveCollected && saveMesh) {
+        frameBallXZ.set(ballPos.x, ballPos.z);
+        frameSaveXZ.set(saveMesh.position.x, saveMesh.position.z);
+        const distToSave = frameBallXZ.distanceTo(frameSaveXZ);
+        if (distToSave < (ballRadius + (ballRadius * 1.6) * 0.8) && !isTransitioning) {
+          collectSave();
+        }
+      }
+    } else {
+      lastVelocity.set(0, 0, 0);
     }
   }
 
+  updateShadowSystem(now);
+
   // Render Scene
   renderer.render(scene, camera);
+
+  const keepRendering = experienceScreen === 'labyrinth'
+    || (experienceScreen === 'team' && Boolean(teamSelection?.needsContinuousRender()));
+  if (keepRendering) {
+    requestAnimationFrame(animate);
+  } else {
+    isAnimating = false;
+  }
 }
 
-// Start pairing fetch and render init
-fetchServerInfo();
-init();
+// Initialize the kiosk; pairing starts only after the attract-screen button.
+void init().catch((error) => {
+  console.error('Fatal kiosk initialization error:', error);
+  startOverlay.classList.remove('hidden');
+  btnStartGame.disabled = true;
+  btnStartGame.textContent = 'ОШИБКА ЗАГРУЗКИ';
+});
 
 // Active states of keyboard directional controls (WASD keys for developer tilting)
 const activeControls = {
@@ -1707,13 +2438,13 @@ window.addEventListener('keydown', (e) => {
   
   if (e.key === 'c' || e.key === 'C') {
     calibrate();
-    socket.emit('calibrate');
+    socket.emit(EVENTS.CALIBRATE);
   }
   if (e.key === 'r' || e.key === 'R') {
     resetGame();
   }
   // Switch maze levels with number keys.
-  if (e.key >= '1' && e.key <= String(MAZE_FILES.length)) {
+  if (e.key >= '1' && e.key <= String(LEVELS.length)) {
     switchMaze(parseInt(e.key) - 1);
   }
 });
@@ -1725,62 +2456,351 @@ window.addEventListener('keyup', (e) => {
   if (e.key === 'd' || e.key === 'D') { activeControls.right = false; }
 });
 
-// Interactive HUD Settings Controls
+// Extensible operator layout/scene editor.
 const settingsTrigger = document.getElementById('settings-trigger') as HTMLButtonElement;
 const settingsPanel = document.getElementById('settings-panel') as HTMLElement;
 const settingsClose = document.getElementById('settings-close') as HTMLButtonElement;
+const settingsGroupSelect = document.getElementById('settings-group-select') as HTMLSelectElement;
+const settingsTargetSelect = document.getElementById('settings-target-select') as HTMLSelectElement;
+const settingsDynamicControls = document.getElementById('settings-dynamic-controls') as HTMLElement;
+const settingsResetTarget = document.getElementById('settings-reset-target') as HTMLButtonElement;
+const settingsResetAll = document.getElementById('settings-reset-all') as HTMLButtonElement;
 
-const sliderCameraHeight = document.getElementById('slider-camera-height') as HTMLInputElement;
-const sliderCameraAngle = document.getElementById('slider-camera-angle') as HTMLInputElement;
-const sliderSceneHeight = document.getElementById('slider-scene-height') as HTMLInputElement;
-
-const valCameraHeight = document.getElementById('val-camera-height') as HTMLElement;
-const valCameraAngle = document.getElementById('val-camera-angle') as HTMLElement;
-const valSceneHeight = document.getElementById('val-scene-height') as HTMLElement;
-
-// Toggle settings panel
-settingsTrigger?.addEventListener('click', () => {
-  settingsPanel?.classList.toggle('hidden');
+sceneEditorPanel = new SceneEditorPanel({
+  trigger: settingsTrigger,
+  panel: settingsPanel,
+  close: settingsClose,
+  groupSelect: settingsGroupSelect,
+  targetSelect: settingsTargetSelect,
+  controls: settingsDynamicControls,
+  resetTarget: settingsResetTarget,
+  resetAll: settingsResetAll,
+  targetProvider: buildEditorTargets,
 });
 
-settingsClose?.addEventListener('click', () => {
-  settingsPanel?.classList.add('hidden');
-});
-
-// Update slider values on UI
-function updateSlidersUI() {
-  if (sliderCameraHeight && valCameraHeight) {
-    sliderCameraHeight.value = cameraHeight.toFixed(1);
-    valCameraHeight.textContent = cameraHeight.toFixed(1);
-  }
-  if (sliderCameraAngle && valCameraAngle) {
-    sliderCameraAngle.value = cameraAngleDeg.toFixed(0);
-    valCameraAngle.textContent = cameraAngleDeg.toFixed(0) + '°';
-  }
-  if (sliderSceneHeight && valSceneHeight) {
-    sliderSceneHeight.value = sceneYShift.toFixed(1);
-    valSceneHeight.textContent = sceneYShift.toFixed(1);
-  }
+function buildEditorTargets(): EditorTarget[] {
+  return [
+    ...buildDomEditorTargets(),
+    ...buildCameraEditorTargets(),
+    ...buildThreeEditorTargets(),
+    buildShadowEditorTarget(),
+  ];
 }
 
-// Bind input events
-sliderCameraHeight?.addEventListener('input', (e) => {
-  const val = parseFloat((e.target as HTMLInputElement).value);
-  cameraHeight = val;
-  if (valCameraHeight) valCameraHeight.textContent = val.toFixed(1);
-  updateCameraPosition();
-});
+interface DomEditorState {
+  x: number;
+  y: number;
+  scaleX: number;
+  scaleY: number;
+  rotationX: number;
+  rotationY: number;
+  rotationZ: number;
+}
 
-sliderCameraAngle?.addEventListener('input', (e) => {
-  const val = parseFloat((e.target as HTMLInputElement).value);
-  cameraAngleDeg = val;
-  if (valCameraAngle) valCameraAngle.textContent = val.toFixed(0) + '°';
-  updateCameraPosition();
-});
+function buildDomEditorTargets(): EditorTarget[] {
+  const elements = [...document.querySelectorAll('#app *')]
+    .filter((element): element is HTMLElement => (
+      element instanceof HTMLElement
+      && element.id !== 'game-canvas'
+      && !element.closest('#settings-panel')
+    ));
 
-sliderSceneHeight?.addEventListener('input', (e) => {
-  const val = parseFloat((e.target as HTMLInputElement).value);
-  sceneYShift = val;
-  if (valSceneHeight) valSceneHeight.textContent = val.toFixed(1);
-  updateCameraPosition();
-});
+  return elements.map((element) => {
+    const state: DomEditorState = {
+      x: readEditorDataNumber(element, 'editorX', 0),
+      y: readEditorDataNumber(element, 'editorY', 0),
+      scaleX: readEditorDataNumber(element, 'editorScaleX', 1),
+      scaleY: readEditorDataNumber(element, 'editorScaleY', 1),
+      rotationX: readEditorDataNumber(element, 'editorRotationX', 0),
+      rotationY: readEditorDataNumber(element, 'editorRotationY', 0),
+      rotationZ: readEditorDataNumber(element, 'editorRotationZ', 0),
+    };
+    const apply = () => applyDomEditorState(element, state);
+    apply();
+    return {
+      id: `dom:${getStableDomKey(element)}`,
+      label: getDomEditorLabel(element),
+      group: getDomEditorGroup(element),
+      fields: [
+        createField('x', 'Позиция X', -1_500, 1_500, 1, state.x, () => state.x, (value) => { state.x = value; apply(); }, ' px'),
+        createField('y', 'Позиция Y', -1_500, 1_500, 1, state.y, () => state.y, (value) => { state.y = value; apply(); }, ' px'),
+        createField('scaleX', 'Масштаб X', 0.1, 4, 0.01, state.scaleX, () => state.scaleX, (value) => { state.scaleX = value; apply(); }),
+        createField('scaleY', 'Масштаб Y', 0.1, 4, 0.01, state.scaleY, () => state.scaleY, (value) => { state.scaleY = value; apply(); }),
+        createField('rotationX', 'Наклон X', -180, 180, 1, state.rotationX, () => state.rotationX, (value) => { state.rotationX = value; apply(); }, '°'),
+        createField('rotationY', 'Наклон Y', -180, 180, 1, state.rotationY, () => state.rotationY, (value) => { state.rotationY = value; apply(); }, '°'),
+        createField('rotationZ', 'Поворот Z', -180, 180, 1, state.rotationZ, () => state.rotationZ, (value) => { state.rotationZ = value; apply(); }, '°'),
+      ],
+    };
+  });
+}
+
+function readEditorDataNumber(element: HTMLElement, key: keyof DOMStringMap, fallback: number) {
+  const value = Number(element.dataset[key]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function applyDomEditorState(element: HTMLElement, state: DomEditorState) {
+  element.style.translate = `${state.x}px ${state.y}px`;
+  element.style.scale = `${state.scaleX} ${state.scaleY}`;
+  element.style.rotate = eulerDegreesToCssAxisAngle(
+    state.rotationX,
+    state.rotationY,
+    state.rotationZ,
+  );
+}
+
+function eulerDegreesToCssAxisAngle(xDeg: number, yDeg: number, zDeg: number) {
+  const x = THREE.MathUtils.degToRad(xDeg) * 0.5;
+  const y = THREE.MathUtils.degToRad(yDeg) * 0.5;
+  const z = THREE.MathUtils.degToRad(zDeg) * 0.5;
+  const cx = Math.cos(x); const sx = Math.sin(x);
+  const cy = Math.cos(y); const sy = Math.sin(y);
+  const cz = Math.cos(z); const sz = Math.sin(z);
+  const qx = sx * cy * cz + cx * sy * sz;
+  const qy = cx * sy * cz - sx * cy * sz;
+  const qz = cx * cy * sz + sx * sy * cz;
+  const qw = cx * cy * cz - sx * sy * sz;
+  const angle = 2 * Math.acos(Math.max(-1, Math.min(1, qw)));
+  const denominator = Math.sqrt(Math.max(0, 1 - qw * qw));
+  if (angle < 0.000001 || denominator < 0.000001) return 'none';
+  return `${qx / denominator} ${qy / denominator} ${qz / denominator} ${angle}rad`;
+}
+
+function getStableDomKey(element: HTMLElement) {
+  if (element.id) return element.id;
+  const segments: string[] = [];
+  let current: HTMLElement | null = element;
+  while (current && current.id !== 'app') {
+    const siblings = current.parentElement
+      ? [...current.parentElement.children].filter((sibling) => sibling.tagName === current!.tagName)
+      : [];
+    segments.unshift(`${current.tagName.toLowerCase()}:${Math.max(0, siblings.indexOf(current))}`);
+    if (current.parentElement?.id) {
+      segments.unshift(current.parentElement.id);
+      break;
+    }
+    current = current.parentElement;
+  }
+  return segments.join('/');
+}
+
+function getDomEditorLabel(element: HTMLElement) {
+  const explicit = element.dataset.editorLabel;
+  if (explicit) return explicit;
+  if (element.id) return `#${element.id}`;
+  const imageAlt = element instanceof HTMLImageElement ? element.alt.trim() : '';
+  const text = (element.getAttribute('aria-label') || imageAlt || element.textContent || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 42);
+  const className = typeof element.className === 'string'
+    ? element.className.split(/\s+/).filter(Boolean)[0]
+    : '';
+  return text || (className ? `.${className}` : element.tagName.toLowerCase());
+}
+
+function getDomEditorGroup(element: HTMLElement) {
+  if (element.closest('#start-overlay')) return 'DOM — стартовый экран';
+  if (element.closest('#team-selection-overlay')) return 'DOM — выбор команды';
+  if (element.closest('#photo-overlay')) return 'DOM — фото';
+  if (element.closest('#pairing-overlay')) return 'DOM — QR и сопряжение';
+  if (element.closest('#hud-overlay')) return 'DOM — игровой HUD';
+  if (element.closest('#victory-overlay')) return 'DOM — результат';
+  return 'DOM — общие элементы';
+}
+
+function buildCameraEditorTargets(): EditorTarget[] {
+  const startTarget: EditorTarget = {
+    id: 'camera:start',
+    label: 'Камера стартового экрана',
+    group: 'Камеры',
+    fields: createCameraViewFields(startCameraView.position, startCameraView.target, () => startCameraView.fov, (value) => { startCameraView.fov = value; }, {
+      position: { x: 0, y: 0.5, z: 10 },
+      target: { x: 0, y: 0.5, z: 0 },
+      fov: 45,
+    }),
+    afterApply: () => {
+      if (isStartScreenActive) applyCameraView(startCameraView);
+    },
+  };
+
+  const teamPosition = teamCameraView.position;
+  const teamTarget = teamCameraView.target;
+  const teamEditorTarget: EditorTarget = {
+    id: 'camera:team',
+    label: 'Камера выбора команды',
+    group: 'Камеры',
+    fields: createPlainCameraViewFields(teamPosition, teamTarget, () => teamCameraView.fov, (value) => { teamCameraView.fov = value; }, {
+      position: { x: 0, y: 0.35, z: 12 },
+      target: { x: 0, y: -0.35, z: 0 },
+      fov: 45,
+    }),
+    afterApply: () => {
+      teamSelection?.setCameraView(teamCameraView);
+      markShadowMapDirty();
+      renderSceneOnce();
+    },
+  };
+
+  const gameTarget: EditorTarget = {
+    id: 'camera:game',
+    label: 'Камера лабиринта',
+    group: 'Камеры',
+    fields: [
+      createField('x', 'Позиция X', -20, 20, 0.1, 0, () => gameCameraX, (value) => { gameCameraX = value; }, ' м'),
+      createField('height', 'Высота камеры', -10, 40, 0.1, 4.8, () => cameraHeight, (value) => { cameraHeight = value; }, ' м'),
+      createField('angle', 'Угол сверху', 0, 89, 1, 0, () => cameraAngleDeg, (value) => { cameraAngleDeg = value; }, '°'),
+      createField('distance', 'Дистанция', 0.5, 4, 0.05, 1.9, () => gameCameraDistanceMultiplier, (value) => { gameCameraDistanceMultiplier = value; }, '×'),
+      createField('targetY', 'Высота точки взгляда', -10, 15, 0.1, 1, () => gameCameraTargetY, (value) => { gameCameraTargetY = value; }, ' м'),
+      createField('sceneY', 'Сдвиг сцены по высоте', -10, 10, 0.1, 0, () => sceneYShift, (value) => { sceneYShift = value; }, ' м'),
+      createField('fov', 'Поле зрения', 15, 100, 1, 45, () => gameCameraFov, (value) => { gameCameraFov = value; }, '°'),
+    ],
+    afterApply: () => {
+      if (experienceScreen === 'labyrinth') {
+        updateCameraPosition();
+        markShadowMapDirty();
+        renderSceneOnce();
+      }
+    },
+  };
+  return [startTarget, teamEditorTarget, gameTarget];
+}
+
+function createCameraViewFields(
+  position: THREE.Vector3,
+  target: THREE.Vector3,
+  getFov: () => number,
+  setFov: (value: number) => void,
+  defaults: { position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number }; fov: number },
+) {
+  return createPlainCameraViewFields(position, target, getFov, setFov, defaults);
+}
+
+function createPlainCameraViewFields(
+  position: { x: number; y: number; z: number },
+  target: { x: number; y: number; z: number },
+  getFov: () => number,
+  setFov: (value: number) => void,
+  defaults: { position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number }; fov: number },
+): EditorField[] {
+  return [
+    createField('x', 'Камера X', -50, 50, 0.1, defaults.position.x, () => position.x, (value) => { position.x = value; }, ' м'),
+    createField('y', 'Высота камеры', -20, 50, 0.1, defaults.position.y, () => position.y, (value) => { position.y = value; }, ' м'),
+    createField('z', 'Камера Z', -50, 50, 0.1, defaults.position.z, () => position.z, (value) => { position.z = value; }, ' м'),
+    createField('targetX', 'Точка взгляда X', -20, 20, 0.1, defaults.target.x, () => target.x, (value) => { target.x = value; }, ' м'),
+    createField('targetY', 'Точка взгляда Y', -20, 20, 0.1, defaults.target.y, () => target.y, (value) => { target.y = value; }, ' м'),
+    createField('targetZ', 'Точка взгляда Z', -20, 20, 0.1, defaults.target.z, () => target.z, (value) => { target.z = value; }, ' м'),
+    createField('fov', 'Поле зрения', 15, 100, 1, defaults.fov, getFov, setFov, '°'),
+  ];
+}
+
+function buildThreeEditorTargets(): EditorTarget[] {
+  if (!scene) return [];
+  const objects = new Map<string, { id: string; label: string; group: string; object: THREE.Object3D }>();
+  const add = (id: string, label: string, group: string, object: THREE.Object3D | null | undefined) => {
+    if (!object || objects.has(id)) return;
+    objects.set(id, { id, label, group, object });
+  };
+
+  add('game-scene', 'Вся игровая 3D-сцена', '3D — лабиринт', gameSceneEditorRoot);
+  add('game-maze', 'Лабиринт', '3D — лабиринт', mazeEditorRoot);
+  add('game-ball', 'Игровой мяч', '3D — лабиринт', ballEditorRoot);
+  add('game-save', 'Сейв', '3D — лабиринт', saveEditorRoot);
+  for (const target of teamSelection?.getEditorObjects() || []) {
+    add(target.id, target.label, '3D — выбор команды', target.object);
+  }
+
+  scene.traverse((object) => {
+    if (
+      object instanceof THREE.Light
+      || object instanceof THREE.Camera
+      || object === shadowReceiver
+      || object.userData.ignoreEditor
+    ) return;
+    const explicitId = typeof object.userData.editorId === 'string' ? object.userData.editorId : '';
+    const isNamedRuntimeRoot = Boolean(object.name) && (
+      object.parent === scene
+      || object.parent === mazeContainer
+      || object.parent === gameSceneEditorRoot
+    );
+    if (!explicitId && !isNamedRuntimeRoot) return;
+    const id = explicitId || `runtime-${slugifyEditorId(object.parent?.name || 'scene')}-${slugifyEditorId(object.name)}`;
+    const label = String(object.userData.editorLabel || object.name || object.type);
+    const group = object === gameSceneEditorRoot || object.parent === mazeContainer || object.parent === gameSceneEditorRoot
+      ? '3D — лабиринт'
+      : object.name.includes('team') ? '3D — выбор команды' : '3D — прочее';
+    add(id, label, group, object);
+  });
+
+  return [...objects.values()].map(({ id, label, group, object }) => createThreeObjectTarget(id, label, group, object));
+}
+
+function createThreeObjectTarget(id: string, label: string, group: string, object: THREE.Object3D): EditorTarget {
+  const defaults = object.userData.sceneEditorDefaults || {
+    position: object.position.toArray(),
+    rotation: [object.rotation.x, object.rotation.y, object.rotation.z],
+    scale: object.scale.toArray(),
+  };
+  object.userData.sceneEditorDefaults = defaults;
+  const rotation = (axis: 'x' | 'y' | 'z') => THREE.MathUtils.radToDeg(object.rotation[axis]);
+  const setUniformScale = (value: number) => object.scale.setScalar(value);
+  return {
+    id: `three:${id}`,
+    label,
+    group,
+    fields: [
+      createField('x', 'Позиция X', -30, 30, 0.05, defaults.position[0], () => object.position.x, (value) => { object.position.x = value; }, ' м'),
+      createField('y', 'Позиция Y', -30, 30, 0.05, defaults.position[1], () => object.position.y, (value) => { object.position.y = value; }, ' м'),
+      createField('z', 'Позиция Z', -30, 30, 0.05, defaults.position[2], () => object.position.z, (value) => { object.position.z = value; }, ' м'),
+      createField('scaleX', 'Масштаб X', 0.05, 8, 0.01, defaults.scale[0], () => object.scale.x, setUniformScale),
+      createField('scaleY', 'Масштаб Y', 0.05, 8, 0.01, defaults.scale[0], () => object.scale.y, setUniformScale),
+      createField('scaleZ', 'Масштаб Z', 0.05, 8, 0.01, defaults.scale[0], () => object.scale.z, setUniformScale),
+      createField('rotationX', 'Наклон X', -180, 180, 1, THREE.MathUtils.radToDeg(defaults.rotation[0]), () => rotation('x'), (value) => { object.rotation.x = THREE.MathUtils.degToRad(value); }, '°'),
+      createField('rotationY', 'Поворот Y', -180, 180, 1, THREE.MathUtils.radToDeg(defaults.rotation[1]), () => rotation('y'), (value) => { object.rotation.y = THREE.MathUtils.degToRad(value); }, '°'),
+      createField('rotationZ', 'Наклон Z', -180, 180, 1, THREE.MathUtils.radToDeg(defaults.rotation[2]), () => rotation('z'), (value) => { object.rotation.z = THREE.MathUtils.degToRad(value); }, '°'),
+    ],
+    afterApply: () => {
+      object.updateMatrixWorld(true);
+      markShadowMapDirty();
+      if (shouldRenderWebGl()) renderSceneOnce();
+    },
+  };
+}
+
+function buildShadowEditorTarget(): EditorTarget {
+  return {
+    id: 'shadows:rear-plane',
+    label: 'Тень и задняя плоскость',
+    group: 'Свет и тени',
+    fields: [
+      createField('opacity', 'Плотность тени', 0, 0.8, 0.01, 0.22, () => shadowSettings.opacity, (value) => { shadowSettings.opacity = value; }),
+      createField('distance', 'Отступ плоскости', 0.5, 30, 0.1, 3.5, () => shadowSettings.distanceBehindFocus, (value) => { shadowSettings.distanceBehindFocus = value; }, ' м'),
+      createField('size', 'Размер плоскости', 10, 160, 1, 60, () => shadowSettings.size, (value) => { shadowSettings.size = value; }, ' м'),
+      createField('lightX', 'Свет: смещение X', -30, 30, 0.1, -5, () => shadowSettings.lightOffsetX, (value) => { shadowSettings.lightOffsetX = value; }, ' м'),
+      createField('lightY', 'Свет: высота', -10, 40, 0.1, 7, () => shadowSettings.lightOffsetY, (value) => { shadowSettings.lightOffsetY = value; }, ' м'),
+      createField('intensity', 'Сила теневого света', 0, 3, 0.01, 0.42, () => shadowSettings.lightIntensity, (value) => { shadowSettings.lightIntensity = value; }),
+    ],
+    afterApply: () => {
+      markShadowMapDirty();
+      if (shouldRenderWebGl()) renderSceneOnce();
+    },
+  };
+}
+
+function createField(
+  id: string,
+  label: string,
+  min: number,
+  max: number,
+  step: number,
+  defaultValue: number,
+  get: () => number,
+  set: (value: number) => void,
+  unit = '',
+): EditorField {
+  return { id, label, min, max, step, defaultValue, get, set, unit };
+}
+
+function slugifyEditorId(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9а-яё_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'object';
+}
