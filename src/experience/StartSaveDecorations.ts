@@ -80,6 +80,7 @@ export class StartSaveDecorations {
     this.shouldBeVisible = true;
     await this.preload();
     if (!this.shouldBeVisible) return;
+    this.setCastShadows(true);
     this.group.visible = true;
     this.phase = 'entering';
     this.transitionStart = performance.now() + Math.max(0, appearanceDelayMs);
@@ -92,6 +93,7 @@ export class StartSaveDecorations {
     this.shouldBeVisible = false;
     this.phase = 'hidden';
     this.visibility = 0;
+    this.setCastShadows(false);
     this.group.visible = false;
     this.resetMotionRoots();
     this.applyVisibility(0);
@@ -100,6 +102,10 @@ export class StartSaveDecorations {
   beginExit(durationMs = DEFAULT_EXIT_DURATION_MS, now = performance.now()) {
     this.shouldBeVisible = false;
     if (this.phase === 'hidden') return;
+    // Transparent FBX opacity is not represented in a standard shadow map.
+    // Stop casting as the visual exit begins so an opaque cached silhouette
+    // cannot remain after the decoration itself has faded away.
+    this.setCastShadows(false);
     this.exitStartVisibility = this.visibility;
     this.transitionStart = now;
     this.transitionDuration = Math.max(1, durationMs);
@@ -272,6 +278,12 @@ export class StartSaveDecorations {
       }
     }
   }
+
+  private setCastShadows(enabled: boolean) {
+    this.group.traverse((child) => {
+      if (child instanceof THREE.Mesh) child.castShadow = enabled;
+    });
+  }
 }
 
 function cloneMaterials(root: THREE.Object3D) {
@@ -279,7 +291,8 @@ function cloneMaterials(root: THREE.Object3D) {
   root.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
     child.castShadow = true;
-    child.receiveShadow = true;
+    child.receiveShadow = false;
+    child.userData.manualShadowControl = true;
 
     const sourceMaterials = Array.isArray(child.material) ? child.material : [child.material];
     const clonedMaterials = sourceMaterials.map((source) => {

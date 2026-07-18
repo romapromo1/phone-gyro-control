@@ -222,7 +222,7 @@ export class TeamSelection3D {
       model.traverse((child) => {
         if (!(child instanceof THREE.Mesh)) return;
         child.castShadow = true;
-        child.receiveShadow = true;
+        child.receiveShadow = false;
         child.userData.teamId = team.id;
         const source = Array.isArray(child.material) ? child.material : [child.material];
         const cloned = source.map((material) => {

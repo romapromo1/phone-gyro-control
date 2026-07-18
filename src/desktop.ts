@@ -456,9 +456,11 @@ let nextShadowMapUpdateAt = 0;
 let lastShadowExtent = 0;
 let sceneEditorPanel: SceneEditorPanel | null = null;
 
-// Native 4K remains native on a large display (DPR=1), while high-DPR phones
-// no longer supersample the full-screen scene at an 8K-equivalent resolution.
-const MAX_RENDER_PIXELS = 3_840 * 2_160;
+// DOM overlays remain native-resolution, while the WebGL layer is capped at
+// 1440p. Rendering the 3D scene at native 4K more than doubles fragment work
+// with little visible benefit on the softly lit exhibition content.
+const MAX_RENDER_PIXELS = 2_560 * 1_440;
+const MIN_RENDER_PIXEL_RATIO = 2 / 3;
 
 function getTargetPixelRatio() {
   const deviceRatio = Math.max(1, window.devicePixelRatio || 1);
@@ -466,8 +468,11 @@ function getTargetPixelRatio() {
     ? 1.5
     : experienceScreen === 'team' ? 1.25 : 1;
   const nativePixels = Math.max(1, window.innerWidth * window.innerHeight);
-  const budgetRatio = Math.max(1, Math.sqrt(MAX_RENDER_PIXELS / nativePixels));
-  return Math.min(deviceRatio, qualityCap, budgetRatio);
+  const budgetRatio = Math.sqrt(MAX_RENDER_PIXELS / nativePixels);
+  return Math.max(
+    MIN_RENDER_PIXEL_RATIO,
+    Math.min(deviceRatio, qualityCap, budgetRatio),
+  );
 }
 
 function updateRendererQuality() {
@@ -1913,12 +1918,10 @@ function updateShadowSystem(now: number, forceShadowMap = false) {
     forceShadowMap = true;
   }
 
-  // During active play the maze and ball move every rendered frame, so the
-  // shadow map must do the same. A throttled shadow pass makes an otherwise
-  // smooth gyro movement look as if the shadows are shaking behind it.
-  const shadowInterval = experienceScreen === 'labyrinth'
-    ? (isGameActive ? 0 : 50)
-    : 50;
+  // Match the shadow pass to the scene render. The map is deliberately small
+  // and only the rear plane receives it, so this stays cheaper than rendering
+  // self-shadows while avoiding the visible cadence mismatch on moving meshes.
+  const shadowInterval = 0;
   if (forceShadowMap || now >= nextShadowMapUpdateAt) {
     renderer.shadowMap.needsUpdate = true;
     nextShadowMapUpdateAt = now + shadowInterval;
@@ -1942,6 +1945,10 @@ function enableAutomaticMeshShadows() {
       object.castShadow = false;
       return;
     }
+    if (object.userData.manualShadowControl) {
+      object.receiveShadow = false;
+      return;
+    }
     const materials = (Array.isArray(object.material) ? object.material : [object.material])
       .filter(Boolean);
     const invisible = materials.length > 0 && materials.every((material) => (
@@ -1950,7 +1957,10 @@ function enableAutomaticMeshShadows() {
       || (material.transparent && material.opacity <= 0.001)
     ));
     object.castShadow = !invisible;
-    object.receiveShadow = true;
+    // The experience uses one camera-facing rear plane as its shadow surface.
+    // Letting every FBX mesh receive the same VSM adds a shadow lookup to all
+    // materials and causes self-shadow shimmer while the maze rotates.
+    object.receiveShadow = false;
   });
 }
 
@@ -2111,9 +2121,9 @@ async function init() {
   shadowKeyLight = new THREE.DirectionalLight(0xffffff, shadowSettings.lightIntensity);
   shadowKeyLight.name = 'shadow-key-light';
   shadowKeyLight.castShadow = true;
-  shadowKeyLight.shadow.mapSize.set(1536, 1536);
-  shadowKeyLight.shadow.radius = 3.5;
-  shadowKeyLight.shadow.blurSamples = 6;
+  shadowKeyLight.shadow.mapSize.set(1024, 1024);
+  shadowKeyLight.shadow.radius = 3;
+  shadowKeyLight.shadow.blurSamples = 4;
   shadowKeyLight.shadow.bias = -0.00035;
   shadowKeyLight.shadow.normalBias = 0.035;
   shadowKeyLight.shadow.camera.left = -24;
@@ -2260,7 +2270,7 @@ function loadMazeAsset() {
 
         child.material = activeMaterial;
         child.castShadow = true;
-        child.receiveShadow = true;
+        child.receiveShadow = false;
       }
   });
 
@@ -2514,7 +2524,7 @@ function spawnGameElements() {
     ballMesh.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.castShadow = true;
-        child.receiveShadow = true;
+        child.receiveShadow = false;
         if (child.material) {
           if (Array.isArray(child.material)) {
             child.material.forEach((material) => {
@@ -2540,7 +2550,7 @@ function spawnGameElements() {
     });
     ballMesh = new THREE.Mesh(ballGeo, ballMat);
     ballMesh.castShadow = true;
-    ballMesh.receiveShadow = true;
+    ballMesh.receiveShadow = false;
   }
   ballEditorRoot = new THREE.Group();
   ballEditorRoot.name = 'game-ball-editor-root';
@@ -2592,7 +2602,7 @@ function spawnGameElements() {
       if (child instanceof THREE.Mesh) {
         child.visible = true;
         child.castShadow = true;
-        child.receiveShadow = true;
+        child.receiveShadow = false;
         if (child.material) {
           if (Array.isArray(child.material)) {
             child.material.forEach((material) => {
