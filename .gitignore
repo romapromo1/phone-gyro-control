@@ -20,3 +20,7 @@ artifacts/
 **/__pycache__/
 # Gesture capture is disabled; do not ship the local MediaPipe model/WASM cache.
 public/mediapipe/
+
+# Private local operations documentation and production secrets.
+# Never commit or upload this directory.
+Documentation Sol/

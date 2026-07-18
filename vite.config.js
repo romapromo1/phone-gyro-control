@@ -4,7 +4,7 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
-const runtimeAssets = [
+export const runtimeAssets = [
   'public/images/upper.svg',
   'public/images/lower.svg',
   'public/reklama-disclaimer.svg',
@@ -19,6 +19,7 @@ const runtimeAssets = [
   'flags/fbx_balls/argentina_ball.fbx',
   'flags/fbx_balls/argentina_basecolor.png',
   'public/source/save.fbx',
+  'public/source/save.svg',
   'public/3d/save2.fbx',
   'public/source/football.glb',
   'public/source/fixed/labirint2.fbx',
