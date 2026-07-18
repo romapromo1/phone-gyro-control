@@ -238,6 +238,7 @@ export async function startServer(options = {}) {
       server: {
         middlewareMode: true,
         hmr: { server: httpServer },
+        allowedHosts: true,
       },
       appType: 'spa',
     });

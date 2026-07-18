@@ -130,6 +130,7 @@ const btnViewGeneratedImage = document.getElementById('btn-view-generated-image'
 const generatedImageOverlay = document.getElementById('generated-image-overlay') as HTMLElement;
 const generatedTeamImage = document.getElementById('generated-team-image') as HTMLImageElement;
 const btnCloseGeneratedImage = document.getElementById('btn-close-generated-image') as HTMLButtonElement;
+const btnDownloadGeneratedImage = document.getElementById('btn-download-generated-image') as HTMLButtonElement;
 const currentLevelSpan = document.getElementById('current-level') as HTMLElement;
 const btnCalibrate = document.getElementById('btn-calibrate-desktop') as HTMLButtonElement;
 const btnRestart = document.getElementById('btn-restart') as HTMLButtonElement;
@@ -187,7 +188,6 @@ let pairingRequestAbortController: AbortController | null = null;
 let pairingSyncPromise: Promise<void> | null = null;
 let pairingSyncQueued = false;
 let pairingServerResetPending = false;
-let gameRuntimePreloadLifecycle = -1;
 let desktopSocketRegistered = false;
 let desktopRegistrationFailure: string | null = null;
 let lifecycleVersion = 0;
@@ -582,7 +582,9 @@ async function fetchServerInfo(expectedLifecycle: number) {
     qrCodeImg.src = data.qrDataUrl;
     controllerUrlCode.textContent = data.mobileUrl;
     updateConnectionStatus('ОЖИДАНИЕ СМАРТФОНА', true);
-    preloadGameRuntimeAfterQrPaint(expectedLifecycle);
+    // This is normally already warm from the start screen. Keep a fallback
+    // here so a transient startup preload failure gets another attempt.
+    preloadGameRuntimeInBackground();
     const expiresAt = Number(data.expiresAt);
     const refreshDelay = Number.isFinite(expiresAt)
       ? Math.max(10_000, Math.min(60_000, expiresAt - Date.now() - 15_000))
@@ -608,24 +610,13 @@ async function fetchServerInfo(expectedLifecycle: number) {
   }
 }
 
-function preloadGameRuntimeAfterQrPaint(expectedLifecycle: number) {
-  if (gameRuntimePreloadLifecycle === expectedLifecycle) return;
-  gameRuntimePreloadLifecycle = expectedLifecycle;
-  void (async () => {
-    try {
-      // The QR must become scannable before Rapier/WASM and ~9 MB of 3D assets
-      // start competing for the browser's connection pool and main thread.
-      await qrCodeImg.decode().catch(() => undefined);
-      await waitForNextPaint();
-      if (expectedLifecycle !== lifecycleVersion || experienceScreen !== 'labyrinth') return;
-      await ensureGameRuntime();
-    } catch (error) {
-      if (expectedLifecycle !== lifecycleVersion) return;
-      gameRuntimePreloadLifecycle = -1;
-      console.error('Game runtime preload failed:', error);
+function preloadGameRuntimeInBackground() {
+  void ensureGameRuntime().catch((error) => {
+    console.error('Game runtime preload failed:', error);
+    if (experienceScreen === 'labyrinth' && gameSession.state === 'pairing') {
       updateConnectionStatus('ОШИБКА ЗАГРУЗКИ ИГРЫ', true);
     }
-  })();
+  });
 }
 
 async function runPairingSynchronization() {
@@ -1585,6 +1576,15 @@ function retakePhoto() {
   }
 }
 
+function downloadImage(dataUrl: string, filename: string) {
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
 function confirmPhoto() {
   if (!capturedPhotoDataUrl || !selectedTeam || experienceScreen !== 'photo') return;
   btnConfirmPhoto.disabled = true;
@@ -1604,6 +1604,11 @@ function confirmPhoto() {
         generatedTeamImageUrl = imageSource;
         generatedTeamImage.src = imageSource;
         syncGeneratedImageButtonVisibility();
+        try {
+          downloadImage(imageSource, `my-team-character-${team}.png`);
+        } catch (err) {
+          console.error('Auto-download failed:', err);
+        }
       }
       window.dispatchEvent(new CustomEvent('team-image-ready', { detail: { ...result, team } }));
     })
@@ -1673,6 +1678,11 @@ function resetGeneratedImageState() {
 
 btnViewGeneratedImage.addEventListener('click', openGeneratedImage);
 btnCloseGeneratedImage.addEventListener('click', closeGeneratedImage);
+btnDownloadGeneratedImage.addEventListener('click', () => {
+  if (generatedTeamImageUrl) {
+    downloadImage(generatedTeamImageUrl, `my-team-character-${selectedTeam || 'avatar'}.png`);
+  }
+});
 
 async function enterLabyrinthFlow() {
   closeSettingsDrawer();
@@ -1686,8 +1696,8 @@ async function enterLabyrinthFlow() {
   setShadowPresentationVisible(false);
   markShadowMapDirty();
   renderSceneOnce();
-  // Pairing deliberately starts before Rapier/WASM and FBX preloading. The
-  // runtime preload is scheduled only after the QR image has painted.
+  // Rapier/WASM and the FBX assets have been warming since the start screen,
+  // so pairing should only need to clone the already parsed first maze.
   await openPairing(true);
 }
 
@@ -2051,8 +2061,9 @@ function ensureSceneEnvironment() {
 
 // Initialize Graphics & Physics
 async function init() {
-  // Set up the light start/team runtime first. Rapier and maze assets are
-  // loaded only after the photo step, while the guest scans the QR code.
+  // Set up the light start/team runtime first. The game runtime starts warming
+  // after the first paint so an event station is ready before a guest reaches
+  // the QR screen.
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xffffff); // White background
 
@@ -2193,10 +2204,11 @@ async function init() {
   showStartScreen();
   window.addEventListener('resize', onWindowResize);
 
-  // FBX balls are the only non-critical background preload. Starting it after
-  // the first paint keeps the button responsive even on a cold Render load.
+  // Start all non-visible downloads after the first paint. In particular,
+  // Rapier and the mazes must not begin only after the guest scans the QR.
   const preloadTeamAssets = () => {
     ensureSceneEnvironment();
+    preloadGameRuntimeInBackground();
     void teamSelection?.preload()
       .then(() => {
         enableAutomaticMeshShadows();
@@ -2205,7 +2217,7 @@ async function init() {
       })
       .catch((error) => console.error('Team ball preload failed:', error));
   };
-  window.requestIdleCallback(preloadTeamAssets, { timeout: 1_200 });
+  window.requestIdleCallback(preloadTeamAssets, { timeout: 600 });
 }
 
 function loadMazeAsset() {

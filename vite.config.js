@@ -47,6 +47,7 @@ function copyRuntimeAssets() {
 
 export default defineConfig({
   publicDir: false,
+  server: { allowedHosts: true },
   plugins: [copyRuntimeAssets()],
   build: {
     rollupOptions: {

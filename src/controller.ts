@@ -19,7 +19,11 @@ interface ClaimResponse {
 
 const SOCKET_CONNECT_TIMEOUT_MS = 12_000;
 const CLAIM_ACK_TIMEOUT_MS = 8_000;
-const MAX_CLAIM_RETRIES = 8;
+const MAX_RESUME_CLAIM_RETRIES = 8;
+// A pairing QR is refreshed after about a minute. Keep retrying for nearly
+// that entire window so a Render cold start or a brief desktop reconnect does
+// not strand the guest on a manual "retry" screen.
+const MAX_STATION_CLAIM_RETRIES = 40;
 const DEFAULT_PERMISSION_DESCRIPTION = 'Положите смартфон горизонтально на ладонь экраном вверх и подключите управление.';
 
 const socket = io(window.location.origin, {
@@ -224,13 +228,16 @@ async function claimController() {
 }
 
 function scheduleClaimRetry(reason?: string) {
-  if (claimRetryTimer !== null || claimRetryCount >= MAX_CLAIM_RETRIES) return false;
+  const maxRetries = reason === 'station-offline'
+    ? MAX_STATION_CLAIM_RETRIES
+    : MAX_RESUME_CLAIM_RETRIES;
+  if (claimRetryTimer !== null || claimRetryCount >= maxRetries) return false;
   const delayMs = Math.min(500 + claimRetryCount * 350, 2_000);
   claimRetryCount += 1;
   sessionActive = false;
   if (dashboardScreen.classList.contains('hidden')) {
     showConnectingState(reason === 'station-offline'
-      ? 'Игровой экран переподключается. Пробуем ещё раз…'
+      ? 'Ждём готовности игрового экрана. Подключение продолжится автоматически…'
       : 'Восстанавливаем предыдущую сессию…');
   } else {
     setConnectionStatus('ВОССТАНАВЛИВАЕМ СВЯЗЬ', true);
