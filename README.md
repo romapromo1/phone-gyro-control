@@ -39,7 +39,7 @@ npm run preview:prod
 В корне находится `render.yaml`. Создайте в Render новый Blueprint из репозитория. Конфигурация уже задаёт:
 
 - один постоянно работающий Starter-инстанс;
-- `npm ci && npm run verify` как build command;
+- `npm ci --include=dev && npm run verify` как build command, чтобы TypeScript declaration-пакеты устанавливались и при `NODE_ENV=production`;
 - `npm start` как start command;
 - `/health` как health check;
 - автоматический деплой каждого commit из подключённой ветки;

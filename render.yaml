@@ -6,7 +6,7 @@ services:
     plan: starter
     numInstances: 1
     autoDeployTrigger: commit
-    buildCommand: npm ci && npm run verify
+    buildCommand: npm ci --include=dev && npm run verify
     startCommand: npm start
     healthCheckPath: /health
     maxShutdownDelaySeconds: 30
