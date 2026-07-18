@@ -42,6 +42,7 @@ npm run preview:prod
 - `npm ci && npm run verify` как build command;
 - `npm start` как start command;
 - `/health` как health check;
+- автоматический деплой каждого commit из подключённой ветки;
 - persistent disk `/var/data` для обезличенного журнала сессий;
 - автоматически сгенерированные `OPERATOR_TOKEN` и `KIOSK_TOKEN`.
 

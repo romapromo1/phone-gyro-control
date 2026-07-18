@@ -5,7 +5,7 @@ services:
     region: frankfurt
     plan: starter
     numInstances: 1
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: commit
     buildCommand: npm ci && npm run verify
     startCommand: npm start
     healthCheckPath: /health
