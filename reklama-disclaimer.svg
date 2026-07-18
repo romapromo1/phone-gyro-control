@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1947"
+  height="176"
+  viewBox="0 0 1947 176"
+  role="img"
+  aria-labelledby="title description"
+>
+  <title id="title">Рекламная юридическая маркировка</title>
+  <desc id="description">Реклама. Рекламодатель ООО «ФПТ», ИНН 9705212635. «Накопительный счёт» - договор вклада до востребования с АО &quot;Яндекс Банк&quot; 0+</desc>
+
+  <!--
+    Typography:
+    YS Text Cond / Light (300) / 68 px / 68 px line height
+    Letter spacing: -2% of 68 px = -1.36 px
+    Alignment: two justified lines
+    Background: transparent
+  -->
+  <g
+    fill="#06023A"
+    font-family="'YS Text Cond', 'Arial Narrow', 'Roboto Condensed', Arial, sans-serif"
+    font-size="68px"
+    font-style="normal"
+    font-weight="300"
+    font-stretch="condensed"
+    letter-spacing="-1.36px"
+    text-rendering="geometricPrecision"
+  >
+    <text x="40" y="68">Реклама. Рекламодатель ООО «ФПТ», ИНН 9705212635. «Накопительный</text>
+    <text x="40" y="136" word-spacing="26.58px">счёт» - договор вклада до востребования с АО &quot;Яндекс Банк&quot; 0+</text>
+  </g>
+</svg>

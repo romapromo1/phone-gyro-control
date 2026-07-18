@@ -15,6 +15,8 @@ import { SessionCoordinator } from './server/sessionCoordinator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const KIOSK_SESSION_COOKIE = '__Host-gyro-kiosk-session';
+const KIOSK_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1_000;
 
 export async function startServer(options = {}) {
   const app = express();
@@ -67,6 +69,12 @@ export async function startServer(options = {}) {
   app.disable('x-powered-by');
   app.set('trust proxy', trustProxy ? 1 : false);
   app.use(createSecurityHeaders(isProd));
+  app.get('/', (req, res, next) => {
+    if (kioskAuthRequired && kioskToken) {
+      issueKioskSessionCookie(res, kioskToken, isProd);
+    }
+    next();
+  });
 
   let httpServer;
   if (isProd) {
@@ -99,7 +107,12 @@ export async function startServer(options = {}) {
 
   io.on('connection', (socket) => {
     socket.on(EVENTS.REGISTER_DESKTOP, (payload, ack) => {
-      if (!isAuthorizedToken(kioskToken, payload?.kioskToken, kioskAuthRequired)) {
+      if (!isAuthorizedKioskRequest(
+        socket.request,
+        kioskToken,
+        payload?.kioskToken,
+        kioskAuthRequired,
+      )) {
         safeAck(ack)({ ok: false, reason: 'kiosk-unauthorized' });
         socket.disconnect(true);
         return;
@@ -239,7 +252,10 @@ export async function startServer(options = {}) {
       maxAge: 0,
       setHeaders(res, filePath) {
         if (filePath.endsWith('.html')) {
-          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader(
+            'Cache-Control',
+            res.hasHeader('Set-Cookie') ? 'private, no-store' : 'no-cache',
+          );
         } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
           res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         } else {
@@ -877,13 +893,73 @@ function requireOperator(configuredToken) {
 
 function requireKiosk(configuredToken, required) {
   return (req, res, next) => {
-    const suppliedToken = req.headers.authorization?.replace(/^Bearer\s+/i, '') || '';
-    if (!isAuthorizedToken(configuredToken, suppliedToken, required)) {
+    const suppliedToken = readSuppliedKioskToken(req);
+    if (!isAuthorizedKioskRequest(req, configuredToken, suppliedToken, required)) {
       const status = configuredToken ? 401 : 503;
       return res.status(status).json({ error: configuredToken ? 'unauthorized' : 'kiosk-token-not-configured' });
     }
     next();
   };
+}
+
+function readSuppliedKioskToken(req) {
+  const customHeader = req.headers?.['x-kiosk-token'];
+  if (typeof customHeader === 'string' && customHeader) return customHeader;
+  return req.headers?.authorization?.replace(/^Bearer\s+/i, '') || '';
+}
+
+function isAuthorizedKioskRequest(req, configuredToken, suppliedToken, required) {
+  return hasValidKioskSession(req, configuredToken)
+    || isAuthorizedToken(configuredToken, suppliedToken, required);
+}
+
+function issueKioskSessionCookie(res, configuredToken, secure) {
+  const expiresAt = Date.now() + KIOSK_SESSION_LIFETIME_MS;
+  const nonce = crypto.randomBytes(18).toString('base64url');
+  const payload = `${expiresAt}.${nonce}`;
+  const signature = signKioskSession(payload, configuredToken);
+  res.cookie(KIOSK_SESSION_COOKIE, `${payload}.${signature}`, {
+    httpOnly: true,
+    secure,
+    sameSite: 'strict',
+    path: '/',
+    maxAge: KIOSK_SESSION_LIFETIME_MS,
+  });
+}
+
+function hasValidKioskSession(req, configuredToken) {
+  if (!configuredToken) return false;
+  const value = readCookie(req.headers?.cookie, KIOSK_SESSION_COOKIE);
+  const match = value.match(/^(\d{13})\.([a-zA-Z0-9_-]{24})\.([a-zA-Z0-9_-]{43})$/);
+  if (!match) return false;
+
+  const expiresAt = Number(match[1]);
+  const now = Date.now();
+  if (
+    !Number.isFinite(expiresAt)
+    || expiresAt <= now
+    || expiresAt > now + KIOSK_SESSION_LIFETIME_MS + 60_000
+  ) {
+    return false;
+  }
+
+  const payload = `${match[1]}.${match[2]}`;
+  const expectedSignature = signKioskSession(payload, configuredToken);
+  return isAuthorizedToken(expectedSignature, match[3], true);
+}
+
+function signKioskSession(payload, configuredToken) {
+  return crypto.createHmac('sha256', configuredToken).update(payload).digest('base64url');
+}
+
+function readCookie(cookieHeader, name) {
+  if (typeof cookieHeader !== 'string') return '';
+  for (const part of cookieHeader.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 0 || part.slice(0, separator).trim() !== name) continue;
+    return part.slice(separator + 1).trim();
+  }
+  return '';
 }
 
 function isAuthorizedToken(configuredToken, suppliedToken, required) {

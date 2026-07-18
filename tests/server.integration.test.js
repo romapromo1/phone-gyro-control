@@ -68,6 +68,16 @@ test('production HTTP routes and WebSocket pairing work together', async (t) => 
   assert.match(healthResponse.headers.get('permissions-policy') || '', /gyroscope=\(self\)/);
   assert.equal((await healthResponse.json()).status, 'ok');
 
+  // Loading the kiosk root creates an HttpOnly, host-only browser session.
+  // The server-side KIOSK_TOKEN never needs to be embedded in the frontend.
+  const kioskRootResponse = await fetch(`${baseUrl}/`);
+  const kioskSetCookie = kioskRootResponse.headers.get('set-cookie') || '';
+  assert.match(kioskSetCookie, /^__Host-gyro-kiosk-session=/);
+  assert.match(kioskSetCookie, /HttpOnly/i);
+  assert.match(kioskSetCookie, /Secure/i);
+  assert.match(kioskSetCookie, /SameSite=Strict/i);
+  const kioskSessionCookie = kioskSetCookie.split(';', 1)[0];
+
   const unauthorized = await fetch(`${baseUrl}/api/operator/status`);
   assert.equal(unauthorized.status, 401);
   const authorized = await fetch(`${baseUrl}/api/operator/status`, {
@@ -79,7 +89,7 @@ test('production HTTP routes and WebSocket pairing work together', async (t) => 
   const generationUnavailable = await fetch(`${baseUrl}/api/generate-image`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${kioskToken}`,
+      Cookie: kioskSessionCookie,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ promptText: 'test', base64Image: 'dGVzdA==' }),
@@ -94,18 +104,22 @@ test('production HTTP routes and WebSocket pairing work together', async (t) => 
   });
   assert.deepEqual(rejectedRegistration, { ok: false, reason: 'kiosk-unauthorized' });
 
-  const desktop = createSocket(baseUrl);
+  const desktop = createSocket(baseUrl, ['websocket'], { Cookie: kioskSessionCookie });
   clients.push(desktop);
   await waitForConnect(desktop);
   const registration = await emitWithAck(desktop, EVENTS.REGISTER_DESKTOP, {
-    stationId: 'main', kioskToken, instanceId: 'desktop-integration-000001',
+    stationId: 'main', instanceId: 'desktop-integration-000001',
   });
   assert.equal(registration.ok, true);
 
   const publicPairingResponse = await fetch(`${baseUrl}/api/server-info?station=main`);
   assert.equal(publicPairingResponse.status, 401);
+  const tamperedPairingResponse = await fetch(`${baseUrl}/api/server-info?station=main`, {
+    headers: { Cookie: `${kioskSessionCookie.slice(0, -1)}x` },
+  });
+  assert.equal(tamperedPairingResponse.status, 401);
   const pairingResponse = await fetch(`${baseUrl}/api/server-info?station=main`, {
-    headers: { Authorization: `Bearer ${kioskToken}` },
+    headers: { Cookie: kioskSessionCookie },
   });
   assert.equal(pairingResponse.status, 200);
   const pairing = await pairingResponse.json();
@@ -431,9 +445,10 @@ function pickFailureFields(value) {
   };
 }
 
-function createSocket(baseUrl, transports = ['websocket']) {
+function createSocket(baseUrl, transports = ['websocket'], extraHeaders = undefined) {
   return createClient(baseUrl, {
     transports,
+    extraHeaders,
     forceNew: true,
     reconnection: false,
   });

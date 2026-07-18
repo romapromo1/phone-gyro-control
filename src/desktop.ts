@@ -28,7 +28,7 @@ import {
 } from './editor/SceneEditorPanel';
 
 const KIOSK_TOKEN_STORAGE_KEY = 'gyro-kiosk-token';
-const KIOSK_TOKEN_PATTERN = /^[a-zA-Z0-9_-]{16,256}$/;
+const KIOSK_TOKEN_PATTERN = /^[\x21-\x7e]{16,512}$/;
 const kioskToken = readKioskToken();
 const desktopInstanceId = crypto.randomUUID();
 
@@ -81,8 +81,7 @@ function persistKioskToken(value: string) {
 }
 
 function readKioskToken() {
-  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-  const supplied = hash.get('kiosk') || '';
+  const supplied = readKioskActivationFragment(window.location.hash);
   if (supplied) {
     history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
     if (KIOSK_TOKEN_PATTERN.test(supplied)) {
@@ -98,6 +97,19 @@ function readKioskToken() {
   const sessionToken = readStorageToken(getBrowserStorage('sessionStorage'));
   if (sessionToken) persistKioskToken(sessionToken);
   return sessionToken;
+}
+
+function readKioskActivationFragment(hash: string) {
+  const match = hash.replace(/^#/, '').match(/(?:^|&)kiosk=([^&]*)/);
+  if (!match) return '';
+  try {
+    // URLSearchParams turns a literal "+" into a space, which corrupts
+    // base64-style Render secrets copied directly into the fragment.
+    return decodeURIComponent(match[1]);
+  } catch {
+    console.error('Kiosk activation token is not URL encoded correctly.');
+    return '';
+  }
 }
 
 // UI Elements
@@ -1901,11 +1913,12 @@ function updateShadowSystem(now: number, forceShadowMap = false) {
     forceShadowMap = true;
   }
 
-  // VSM is intentionally updated less often than the scene. Its soft edge
-  // masks the lower cadence, while the maze and gyro motion remain full-rate.
+  // During active play the maze and ball move every rendered frame, so the
+  // shadow map must do the same. A throttled shadow pass makes an otherwise
+  // smooth gyro movement look as if the shadows are shaking behind it.
   const shadowInterval = experienceScreen === 'labyrinth'
-    ? (isGameActive ? 50 : 100)
-    : 84;
+    ? (isGameActive ? 0 : 50)
+    : 50;
   if (forceShadowMap || now >= nextShadowMapUpdateAt) {
     renderer.shadowMap.needsUpdate = true;
     nextShadowMapUpdateAt = now + shadowInterval;
