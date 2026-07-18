@@ -1,6 +1,20 @@
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+}
+
+body {
+  height: 100dvh;
+  min-height: -webkit-fill-available;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 #controller-app {
   width: 100vw;
-  height: 100vh;
+  height: 100dvh;
+  min-height: 100svh;
   padding: 24px;
   padding-bottom: calc(24px + env(safe-area-inset-bottom));
   padding-top: calc(24px + env(safe-area-inset-top));
@@ -10,11 +24,16 @@
   align-items: center;
   position: relative;
   background: radial-gradient(circle at center, #141419 0%, #08080a 100%);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .screen {
   width: 100%;
-  height: 100%;
+  min-height: 100%;
+  height: auto;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -31,6 +50,10 @@
 
 /* Permission screen */
 #permission-screen {
+  justify-content: center;
+}
+
+#session-ended-screen {
   justify-content: center;
 }
 
@@ -74,6 +97,41 @@
   border-radius: 20px;
   color: #00ff66;
   text-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
+}
+
+.status-badge.reconnecting {
+  color: #ffd54a;
+  border-color: rgba(255, 213, 74, 0.55);
+}
+
+.status-badge.reconnecting .status-indicator-dot {
+  background: #ffd54a;
+}
+
+#permission-description.error {
+  color: #ff8fa3;
+}
+
+#permission-description.connecting {
+  color: #ffd54a;
+}
+
+#permission-screen[aria-busy="true"] .glow-btn {
+  cursor: wait;
+  opacity: 0.78;
+}
+
+#permission-screen[aria-busy="true"] .glow-btn::after {
+  content: '';
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-left: 0.7em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.08em;
+  animation: controller-spinner 0.8s linear infinite;
 }
 
 .status-indicator-dot {
@@ -135,6 +193,7 @@
   box-shadow: 0 0 15px var(--accent-cyan);
   transition: transform 0.05s ease-out;
   transform: translate(0px, 0px); /* adjusted in js */
+  will-change: transform;
 }
 
 /* Numeric grid */
@@ -236,4 +295,51 @@
   color: #000000;
   box-shadow: 0 0 15px var(--accent-cyan);
   transform: scale(0.92);
+}
+
+@keyframes controller-spinner {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-height: 740px) {
+  #controller-app {
+    padding: 12px 16px;
+    padding-top: calc(12px + env(safe-area-inset-top));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .sensor-display {
+    gap: 14px;
+  }
+
+  .level-outer {
+    width: 136px;
+    height: 136px;
+  }
+
+  .touch-controls-dpad,
+  .controls-area {
+    margin-top: 4px;
+    margin-bottom: 4px;
+  }
+
+  .instruction {
+    margin-bottom: 8px;
+  }
+
+  .dpad-btn {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen,
+  #level-bubble {
+    transition: none;
+  }
+
+  .status-indicator-dot {
+    animation: none;
+  }
 }

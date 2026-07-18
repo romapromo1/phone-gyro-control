@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gyro Maze — Operator</title>
+  <link rel="stylesheet" href="/src/common.css">
+  <link rel="stylesheet" href="/src/operator.css">
+</head>
+<body>
+  <main class="operator-shell">
+    <section class="glass-panel operator-auth">
+      <h1>Панель оператора</h1>
+      <label for="operator-token">OPERATOR_TOKEN</label>
+      <div class="operator-token-row">
+        <input id="operator-token" type="password" autocomplete="off" placeholder="Введите токен">
+        <button id="operator-connect" class="glow-btn">Подключить</button>
+      </div>
+      <p id="operator-message">Статус обновляется раз в 2 секунды.</p>
+    </section>
+    <section id="stations" class="stations-grid" aria-live="polite"></section>
+  </main>
+  <script type="module" src="/src/operator.ts"></script>
+</body>
+</html>

@@ -12,40 +12,206 @@
     <!-- WebGL Canvas -->
     <canvas id="game-canvas"></canvas>
 
-    <!-- Overlay: QR Code Pairing & Server Info -->
-    <div id="pairing-overlay" class="overlay hidden">
-      <div class="glass-panel text-center animate-fade-in">
-        <h1 class="glow-text">Gyro Maze 3D</h1>
-        <p class="subtitle">Управляйте шаром с помощью смартфона</p>
-        
-        <div class="qr-container">
-          <img id="qr-code" alt="Генерация QR-кода..." />
-        </div>
-        
-        <div class="server-info">
-          <p>Сканируйте QR-код или откройте в браузере телефона:</p>
-          <code id="controller-url">Ожидание сервера...</code>
-        </div>
-        
-        <div class="status-msg waiting">
-          <span class="pulse-dot"></span> Ожидание подключения смартфона...
+    <!-- Runtime overlay: clean campaign QR screen -->
+    <div id="pairing-overlay" class="overlay pairing-overlay hidden">
+      <div class="pairing-copy animate-fade-in">
+        <h1>
+          ПРОЙДИ ВСЕ <em>ЛАБИРИНТЫ</em>,<br />
+          СОБЕРИ МАКСИМУМ СЕЙВОВ ЗА 60 СЕКУНД
+        </h1>
+        <p>СКАНИРУЙ QR-КОД, ЧТОБЫ ПОДКЛЮЧИТЬ СВОЙ СМАРТФОН ДЛЯ УПРАВЛЕНИЯ ЛАБИРИНТОМ</p>
+      </div>
+      <div class="pairing-qr" aria-label="QR-код для подключения смартфона">
+        <img id="qr-code" alt="QR-код для подключения смартфона" />
+      </div>
+      <p id="controller-url" class="visually-hidden" aria-live="polite">Ожидание сервера...</p>
+    </div>
+
+    <!-- The first maze is prepared behind an opaque white loading screen. -->
+    <div id="game-loading-overlay" class="game-stage-overlay game-loading-overlay hidden" aria-live="polite">
+      <div id="game-loading-spinner" class="game-loading-spinner" aria-hidden="true"></div>
+      <span class="visually-hidden">Загружаем лабиринт</span>
+      <div id="game-loading-error" class="liquid-glass-card game-loading-error hidden" role="alert">
+        <p>НЕ УДАЛОСЬ ЗАГРУЗИТЬ ЛАБИРИНТ</p>
+        <div class="game-loading-error-actions">
+          <button id="btn-retry-game-load" class="glow-btn" type="button">ПОВТОРИТЬ</button>
+          <button id="btn-reset-after-load-error" class="glow-btn" type="button">НАЧАТЬ ЗАНОВО</button>
         </div>
       </div>
+    </div>
+
+    <div id="game-instruction-overlay" class="game-stage-overlay game-instruction-overlay hidden" aria-hidden="true">
+      <div class="liquid-glass-card game-instruction-card">
+        <p>ЧТОБЫ УПРАВЛЯТЬ ЛАБИРИНТОМ, НАКЛОНЯЙ СМАРТФОН ВЛЕВО И ВПРАВО, А ТАКЖЕ ВРАЩАЙ ЕГО</p>
+        <button id="btn-start-labyrinth" class="glow-btn">СТАРТ</button>
+      </div>
+    </div>
+
+    <div id="save-progress-overlay" class="game-stage-overlay save-progress-overlay hidden" aria-hidden="true">
+      <div class="liquid-glass-card save-progress-card">
+        <p id="save-progress-message">ТЫ СОБРАЛ 1 СЕЙВ, ОСТАЛОСЬ 3</p>
+      </div>
+    </div>
+
+    <div id="generated-image-overlay" class="generated-image-overlay hidden" aria-hidden="true">
+      <img id="generated-team-image" alt="Сгенерированный образ в форме выбранной сборной" />
+      <button id="btn-close-generated-image" class="generated-image-close" type="button">ЗАКРЫТЬ</button>
     </div>
 
     <!-- Start Screen Overlay -->
     <div id="start-overlay" class="overlay">
-      <div class="start-screen-content">
-        <img id="start-upper-img" class="start-title-img upper" src="/images/upper.svg" alt="Title Top" />
+      <div class="start-screen-content" data-editor-target data-editor-label="Контейнер стартового экрана">
+        <img
+          id="start-upper-img"
+          class="start-title-img upper"
+          data-editor-x="0"
+          data-editor-y="-300"
+          data-editor-scale-x="0.7"
+          data-editor-scale-y="0.7"
+          src="/images/upper.svg"
+          alt="Title Top"
+        />
+        <div
+          id="start-intro-logo"
+          class="start-intro-logo"
+          data-editor-target
+          data-editor-x="0"
+          data-editor-y="-160"
+          data-editor-scale-x="1"
+          data-editor-scale-y="1"
+          aria-label="Показываем, как приумножать впечатления"
+        >
+          <img class="start-intro-line start-intro-line-top" data-editor-label="Слоган — верхняя строка" src="/123321.svg" alt="" />
+          <img class="start-intro-line start-intro-line-bottom" data-editor-label="Слоган — нижняя строка" src="/123321.svg" alt="" />
+        </div>
         <button id="btn-start-game" class="glow-btn start-btn">НАЧАТЬ</button>
-        <img id="start-lower-img" class="start-title-img lower" src="/images/lower.svg" alt="Title Bottom" />
-        <img id="start-disclaimer-img" class="start-disclaimer-img" src="/reklama-disclaimer.svg" alt="Disclaimer" />
+        <img
+          id="start-lower-img"
+          class="start-title-img lower"
+          data-editor-label="ОТ ЯНДЕКС PAY — нижний логотип"
+          data-editor-x="0"
+          data-editor-y="100"
+          data-editor-scale-x="0.5"
+          data-editor-scale-y="0.5"
+          src="/images/lower.svg"
+          alt="от Яндекс Pay"
+        />
+        <img
+          id="start-disclaimer-img"
+          class="start-disclaimer-img"
+          data-editor-x="0"
+          data-editor-y="125"
+          data-editor-scale-x="1.1"
+          data-editor-scale-y="1.1"
+          src="/reklama-disclaimer.svg"
+          alt="Disclaimer"
+        />
       </div>
+    </div>
+
+    <!-- Screen 2: National team selection -->
+    <div id="team-selection-overlay" class="experience-overlay team-selection-overlay hidden" aria-hidden="true">
+      <img
+        id="team-brand-upper"
+        class="experience-brand-img experience-brand-upper"
+        data-editor-label="СЕЙВЫ — верхний логотип"
+        data-editor-x="0"
+        data-editor-y="-300"
+        data-editor-scale-x="0.7"
+        data-editor-scale-y="0.7"
+        src="/images/upper.svg"
+        alt="Сейвы"
+      />
+      <div id="team-selection-copy" class="team-selection-copy" data-editor-target data-editor-label="Заголовки выбора команды">
+        <h1
+          id="team-selection-title"
+          data-editor-label="ГОТОВ УВИДЕТЬ СЕБЯ В ФОРМЕ ЛЮБИМОЙ КОМАНДЫ?"
+          data-editor-x="0"
+          data-editor-y="-250"
+          data-editor-scale-x="2"
+          data-editor-scale-y="2"
+        >ГОТОВ УВИДЕТЬ СЕБЯ В ФОРМЕ<br>ЛЮБИМОЙ КОМАНДЫ?</h1>
+        <p id="team-selection-subtitle" data-editor-label="ВЫБЕРИ, ЗА КОГО БОЛЕЕШЬ" data-editor-x="0">ВЫБЕРИ, ЗА КОГО БОЛЕЕШЬ</p>
+      </div>
+      <div id="team-ball-hitboxes" class="team-ball-hitboxes" data-editor-target aria-label="Шары сборных">
+        <button data-team="england" aria-label="Выбрать Англию"></button>
+        <button data-team="france" aria-label="Выбрать Францию"></button>
+        <button data-team="spain" aria-label="Выбрать Испанию"></button>
+        <button data-team="argentina" aria-label="Выбрать Аргентину"></button>
+      </div>
+      <div id="team-options" class="team-options" data-editor-target aria-label="Выбор сборной">
+        <button id="team-label-england" class="team-option" data-team="england" data-editor-label="АНГЛИЯ" data-editor-y="-250" data-editor-scale-x="2.2" data-editor-scale-y="2.2">АНГЛИЯ</button>
+        <button id="team-label-france" class="team-option" data-team="france" data-editor-label="ФРАНЦИЯ" data-editor-y="-250" data-editor-scale-x="2.2" data-editor-scale-y="2.2">ФРАНЦИЯ</button>
+        <button id="team-label-spain" class="team-option" data-team="spain" data-editor-label="ИСПАНИЯ" data-editor-y="-250" data-editor-scale-x="2.2" data-editor-scale-y="2.2">ИСПАНИЯ</button>
+        <button id="team-label-argentina" class="team-option" data-team="argentina" data-editor-label="АРГЕНТИНА" data-editor-y="-250" data-editor-scale-x="2.2" data-editor-scale-y="2.2">АРГЕНТИНА</button>
+      </div>
+      <button id="btn-open-camera" class="glow-btn photo-cta" disabled>СДЕЛАТЬ ФОТО</button>
+      <img
+        id="team-brand-lower"
+        class="experience-brand-img experience-brand-lower"
+        data-editor-label="ОТ ЯНДЕКС PAY — нижний логотип"
+        data-editor-x="0"
+        data-editor-y="100"
+        data-editor-scale-x="0.5"
+        data-editor-scale-y="0.5"
+        src="/images/lower.svg"
+        alt="от Яндекс Pay"
+      />
+    </div>
+
+    <!-- Screen 3: Camera and confirmation -->
+    <div id="photo-overlay" class="experience-overlay photo-overlay hidden" aria-hidden="true">
+      <img
+        id="photo-brand-upper"
+        class="photo-brand-upper"
+        data-editor-label="СЕЙВЫ — верхний логотип"
+        data-editor-x="0"
+        data-editor-y="-300"
+        data-editor-scale-x="0.7"
+        data-editor-scale-y="0.7"
+        src="/images/upper.svg"
+        alt="Сейвы"
+      />
+      <div class="photo-slogan" data-editor-target data-editor-label="Фотослоган" aria-label="Пока вы фотографируетесь, проценты приходят">
+        <span>ПОКА ВЫ ФОТОГРАФИРУЕТЕСЬ,</span>
+        <strong>ПРОЦЕНТЫ ПРИХОДЯТ</strong>
+      </div>
+      <div class="camera-stage" data-editor-target data-editor-label="Окно камеры">
+        <video id="camera-video" autoplay muted playsinline></video>
+        <img id="camera-preview" class="hidden" alt="Сделанное фото" />
+        <canvas id="camera-capture" class="hidden"></canvas>
+        <div id="camera-flash" class="camera-flash" aria-hidden="true"></div>
+        <div
+          id="camera-countdown"
+          class="camera-countdown"
+          role="timer"
+          aria-live="assertive"
+          aria-hidden="true"
+        ></div>
+        <p id="camera-status" class="camera-status" role="status" aria-live="polite">Подключаем камеру…</p>
+      </div>
+      <div class="camera-actions" data-editor-target data-editor-label="Кнопки камеры">
+        <button id="btn-capture-photo" class="glow-btn" disabled>СДЕЛАТЬ ФОТО</button>
+        <button id="btn-retake-photo" class="glow-btn hidden">ПЕРЕСНЯТЬ</button>
+        <button id="btn-confirm-photo" class="glow-btn hidden">ПОДТВЕРДИТЬ</button>
+      </div>
+      <img
+        id="photo-brand-lower"
+        class="photo-brand-lower"
+        data-editor-label="ОТ ЯНДЕКС PAY — нижний логотип"
+        data-editor-x="0"
+        data-editor-y="100"
+        data-editor-scale-x="0.5"
+        data-editor-scale-y="0.5"
+        src="/images/lower.svg"
+        alt="от Яндекс Pay"
+      />
+      <img class="photo-disclaimer" src="/reklama-disclaimer.svg" alt="Рекламный дисклеймер" />
     </div>
 
     <!-- UI Overlay for Game Status -->
     <div id="hud-overlay" class="hidden">
-      <div class="hud-top">
+      <div class="hud-top" data-editor-target data-editor-label="Верхняя панель HUD">
         <div class="level-info">
           <button id="btn-prev-level" class="level-nav-btn" style="display:none;" title="Предыдущий лабиринт">◄</button>
           <div>
@@ -68,22 +234,24 @@
 
         <div class="hud-right">
           <button id="btn-hud-restart" class="hud-restart-btn">Начать заново</button>
-          <div class="connection-indicator">
-            <span class="status-dot"></span> СМАРТФОН АКТИВЕН
+          <div id="connection-indicator" class="connection-indicator">
+            <span class="status-dot"></span> <span id="connection-status-text">СМАРТФОН НЕ ПОДКЛЮЧЁН</span>
           </div>
         </div>
       </div>
 
-      <div class="hud-bottom">
+      <div class="hud-bottom" data-editor-target data-editor-label="Нижняя панель HUD">
         <button id="btn-calibrate-desktop" class="glow-btn">Сбросить Угол</button>
       </div>
     </div>
+
+    <button id="btn-view-generated-image" class="generated-image-cta hidden" type="button">ПОСМОТРЕТЬ ОБРАЗ</button>
 
     <!-- Victory / Game Over Overlay -->
     <div id="victory-overlay" class="overlay hidden">
       <div class="glass-panel text-center">
         <h1 id="modal-title" class="glow-text-victory">ПОБЕДА!</h1>
-        <p id="modal-subtitle" class="subtitle">Вы собрали все 6 сейвов за 45 секунд!</p>
+        <p id="modal-subtitle" class="subtitle">Вы собрали все 4 сейва за 60 секунд!</p>
         <button id="btn-restart" class="glow-btn">Играть снова</button>
       </div>
     </div>
@@ -104,30 +272,16 @@
           <button id="settings-close" class="close-btn">&times;</button>
         </div>
         <div class="settings-body">
-          <!-- Slider: Camera Height -->
-          <div class="setting-item">
-            <div class="setting-label">
-              <span>Высота камеры</span>
-              <span id="val-camera-height">4.8</span>
-            </div>
-            <input type="range" id="slider-camera-height" min="1.0" max="15.0" step="0.1" value="4.8">
+          <label class="settings-select-label" for="settings-group-select">Раздел</label>
+          <select id="settings-group-select" class="settings-select"></select>
+          <label class="settings-select-label" for="settings-target-select">Элемент</label>
+          <select id="settings-target-select" class="settings-select"></select>
+          <div id="settings-dynamic-controls" class="settings-dynamic-controls"></div>
+          <div class="settings-actions">
+            <button id="settings-reset-target" type="button">Сбросить элемент</button>
+            <button id="settings-reset-all" type="button">Сбросить всё</button>
           </div>
-          <!-- Slider: Camera Angle -->
-          <div class="setting-item">
-            <div class="setting-label">
-              <span>Угол камеры</span>
-              <span id="val-camera-angle">0.0</span>
-            </div>
-            <input type="range" id="slider-camera-angle" min="0.0" max="90.0" step="1.0" value="0.0">
-          </div>
-          <!-- Slider: Scene Height -->
-          <div class="setting-item">
-            <div class="setting-label">
-              <span>Высота сцены</span>
-              <span id="val-scene-height">0.0</span>
-            </div>
-            <input type="range" id="slider-scene-height" min="-5.0" max="5.0" step="0.1" value="0.0">
-          </div>
+          <p class="settings-hint">DOM-элементы добавляются автоматически. Для нового 3D-корня задайте уникальное имя или <code>userData.editorId</code>. Чтобы визуал не расходился с физикой, лабиринт, мяч и сейв перемещайте вместе через «Вся игровая 3D-сцена».</p>
         </div>
       </div>
     </div>

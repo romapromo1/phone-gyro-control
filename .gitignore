@@ -11,3 +11,12 @@ scratch/
 123.svg
 1233.svg
 public/test_fbx.html
+data/
+.env
+.env.*
+!.env.example
+.codex-tmp/
+artifacts/
+**/__pycache__/
+# Gesture capture is disabled; do not ship the local MediaPipe model/WASM cache.
+public/mediapipe/

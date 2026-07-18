@@ -18,9 +18,10 @@ import {
   type TeamCameraView,
   type TeamDefinition,
 } from './experience/TeamSelection3D';
+import { StartSaveDecorations } from './experience/StartSaveDecorations';
 import { submitTeamGeneration } from './experience/teamGenerationService';
-import { ThumbUpCapture, type ThumbCaptureState } from './experience/ThumbUpCapture';
 import {
+  SCENE_EDITOR_STORAGE_KEY,
   SceneEditorPanel,
   type EditorField,
   type EditorTarget,
@@ -28,7 +29,10 @@ import {
 
 // Connect to the socket server
 const socket = io({
-  transports: ['websocket'],
+  // Use polling for the initial handshake and upgrade to WebSocket. This
+  // keeps the kiosk registered on venue networks that block direct WS.
+  transports: ['polling', 'websocket'],
+  upgrade: true,
   reconnection: true,
   reconnectionDelayMax: 2_000,
 });
@@ -57,6 +61,19 @@ const pairingOverlay = document.getElementById('pairing-overlay') as HTMLElement
 const hudOverlay = document.getElementById('hud-overlay') as HTMLElement;
 const qrCodeImg = document.getElementById('qr-code') as HTMLImageElement;
 const controllerUrlCode = document.getElementById('controller-url') as HTMLElement;
+const gameLoadingOverlay = document.getElementById('game-loading-overlay') as HTMLElement;
+const gameLoadingSpinner = document.getElementById('game-loading-spinner') as HTMLElement;
+const gameLoadingError = document.getElementById('game-loading-error') as HTMLElement;
+const btnRetryGameLoad = document.getElementById('btn-retry-game-load') as HTMLButtonElement;
+const btnResetAfterLoadError = document.getElementById('btn-reset-after-load-error') as HTMLButtonElement;
+const gameInstructionOverlay = document.getElementById('game-instruction-overlay') as HTMLElement;
+const btnStartLabyrinth = document.getElementById('btn-start-labyrinth') as HTMLButtonElement;
+const saveProgressOverlay = document.getElementById('save-progress-overlay') as HTMLElement;
+const saveProgressMessage = document.getElementById('save-progress-message') as HTMLElement;
+const btnViewGeneratedImage = document.getElementById('btn-view-generated-image') as HTMLButtonElement;
+const generatedImageOverlay = document.getElementById('generated-image-overlay') as HTMLElement;
+const generatedTeamImage = document.getElementById('generated-team-image') as HTMLImageElement;
+const btnCloseGeneratedImage = document.getElementById('btn-close-generated-image') as HTMLButtonElement;
 const currentLevelSpan = document.getElementById('current-level') as HTMLElement;
 const btnCalibrate = document.getElementById('btn-calibrate-desktop') as HTMLButtonElement;
 const btnRestart = document.getElementById('btn-restart') as HTMLButtonElement;
@@ -65,6 +82,9 @@ const btnPrevLevel = document.getElementById('btn-prev-level') as HTMLButtonElem
 const btnNextLevel = document.getElementById('btn-next-level') as HTMLButtonElement;
 const connectionIndicator = document.getElementById('connection-indicator') as HTMLElement;
 const connectionStatusText = document.getElementById('connection-status-text') as HTMLElement;
+const settingsTrigger = document.getElementById('settings-trigger') as HTMLButtonElement;
+const settingsPanel = document.getElementById('settings-panel') as HTMLElement;
+const settingsClose = document.getElementById('settings-close') as HTMLButtonElement;
 
 // New HUD elements Binds
 const timerSpan = document.getElementById('game-timer') as HTMLElement;
@@ -84,6 +104,7 @@ const cameraPreview = document.getElementById('camera-preview') as HTMLImageElem
 const cameraCapture = document.getElementById('camera-capture') as HTMLCanvasElement;
 const cameraStatus = document.getElementById('camera-status') as HTMLElement;
 const cameraFlash = document.getElementById('camera-flash') as HTMLElement;
+const cameraCountdown = document.getElementById('camera-countdown') as HTMLElement;
 const btnCapturePhoto = document.getElementById('btn-capture-photo') as HTMLButtonElement;
 const btnRetakePhoto = document.getElementById('btn-retake-photo') as HTMLButtonElement;
 const btnConfirmPhoto = document.getElementById('btn-confirm-photo') as HTMLButtonElement;
@@ -106,17 +127,33 @@ let currentControllerSessionId: string | null = null;
 let sessionPreparationInFlight = false;
 let resultResetTimer: number | null = null;
 let pairingRefreshTimer: number | null = null;
+let pairingRequestAbortController: AbortController | null = null;
+let pairingSyncPromise: Promise<void> | null = null;
+let pairingSyncQueued = false;
+let pairingServerResetPending = false;
+let gameRuntimePreloadLifecycle = -1;
+let desktopSocketRegistered = false;
+let desktopRegistrationFailure: string | null = null;
 let lifecycleVersion = 0;
 type ExperienceScreen = 'start' | 'transition' | 'team' | 'photo' | 'labyrinth';
 let experienceScreen: ExperienceScreen = 'start';
 let teamSelection: TeamSelection3D | null = null;
+let startSaveDecorations: StartSaveDecorations | null = null;
 let selectedTeam: TeamDefinition | null = null;
 let cameraStream: MediaStream | null = null;
 let capturedPhotoDataUrl = '';
 let photoCaptureInFlight = false;
 let generationAbortController: AbortController | null = null;
-const thumbUpCapture = new ThumbUpCapture();
 let cameraStatusTimer: number | null = null;
+let photoCountdownVersion = 0;
+let gameReadyForManualStart = false;
+let saveCelebrationActive = false;
+let saveCelebrationTimer: number | null = null;
+let pendingPostSaveAction: number | 'finish' | null = null;
+let generatedImageRequestVersion = 0;
+let generatedTeamImageUrl = '';
+let generatedImageViewerOpen = false;
+let generatedImageViewerPausedGame = false;
 
 // Transition and save object state
 let saveMesh: THREE.Group | null = null;
@@ -139,6 +176,8 @@ let mazeMaterial: THREE.MeshPhysicalMaterial;
 let floorMaterial: THREE.MeshStandardMaterial;
 
 // Sound Manager using Web Audio API (Synthesized sounds)
+const GAME_AUDIO_ENABLED = false;
+
 class SoundManager {
   private ctx: AudioContext | null = null;
   private rollOsc: OscillatorNode | null = null;
@@ -147,6 +186,7 @@ class SoundManager {
   private isInitialized = false;
 
   init() {
+    if (!GAME_AUDIO_ENABLED) return;
     if (this.isInitialized) {
       // If already initialized but suspended (due to browser autoplay policies), resume it
       if (this.ctx && this.ctx.state === 'suspended') {
@@ -275,9 +315,11 @@ const sounds = new SoundManager();
 function handleUserGesture() {
   sounds.init();
 }
-window.addEventListener('click', handleUserGesture);
-window.addEventListener('keydown', handleUserGesture);
-window.addEventListener('touchstart', handleUserGesture);
+if (GAME_AUDIO_ENABLED) {
+  window.addEventListener('click', handleUserGesture);
+  window.addEventListener('keydown', handleUserGesture);
+  window.addEventListener('touchstart', handleUserGesture);
+}
 
 // Game State variables
 let scene: THREE.Scene;
@@ -346,6 +388,7 @@ const teamCameraView: TeamCameraView = {
 const shadowSettings = {
   opacity: 0.22,
   distanceBehindFocus: 3.5,
+  screenDistanceBehindFocus: 1.2,
   size: 60,
   lightOffsetX: -5,
   lightOffsetY: 7,
@@ -389,57 +432,248 @@ const frameSaveXZ = new THREE.Vector2();
 const frameMazeRotation = new THREE.Quaternion();
 const frameMazeEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 
-// Fetch server pairing information
-async function fetchServerInfo() {
+const PAIRING_RETRY_DELAY_MS = 3_000;
+const PAIRING_REQUEST_TIMEOUT_MS = 8_000;
+
+class PairingRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'PairingRequestError';
+  }
+}
+
+function clearPairingRefreshTimer() {
+  if (pairingRefreshTimer !== null) window.clearTimeout(pairingRefreshTimer);
+  pairingRefreshTimer = null;
+}
+
+function abortPairingRequest() {
+  pairingRequestAbortController?.abort();
+  pairingRequestAbortController = null;
+}
+
+function schedulePairingRefresh(delay = PAIRING_RETRY_DELAY_MS) {
+  clearPairingRefreshTimer();
+  if (gameSession.state !== 'pairing') return;
+  pairingRefreshTimer = window.setTimeout(() => {
+    pairingRefreshTimer = null;
+    void refreshPairingSession();
+  }, delay);
+}
+
+function localBackendHint() {
+  const isLocalhost = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+  return isLocalhost
+    ? 'Запустите приложение командой npm run dev, а не Vite отдельно.'
+    : 'Проверьте, что Render-сервис запущен и доступен.';
+}
+
+function pairingErrorMessage(error: unknown, timedOut: boolean) {
+  if (timedOut) return 'Сервер не ответил вовремя. Повторяем подключение…';
+  if (!navigator.onLine) return 'Нет подключения к сети. QR появится после восстановления связи.';
+  if (error instanceof PairingRequestError) {
+    if (error.status === 401 || error.status === 403) {
+      return 'Экран не авторизован. Откройте адрес заново с #kiosk=<KIOSK_TOKEN>.';
+    }
+    if (error.status === 404) {
+      return `API сопряжения не найден. ${localBackendHint()}`;
+    }
+    if (error.status === 409) return `${error.message}. Повторяем…`;
+    if (error.status >= 500) return 'Сервер не смог создать QR-код. Повторяем…';
+    return `${error.message} Повторяем…`;
+  }
+  return `Нет связи с сервером. ${localBackendHint()}`;
+}
+
+// Fetch server pairing information. All retries are routed through the single
+// pairing scheduler below so a temporary outage cannot create parallel loops.
+async function fetchServerInfo(expectedLifecycle: number) {
+  const requestController = new AbortController();
+  pairingRequestAbortController = requestController;
+  let timedOut = false;
+  const timeout = window.setTimeout(() => {
+    timedOut = true;
+    requestController.abort();
+  }, PAIRING_REQUEST_TIMEOUT_MS);
+
   try {
     const res = await fetch(`/api/server-info?station=${encodeURIComponent(STATION_ID)}`, {
       cache: 'no-store',
       headers: kioskToken ? { Authorization: `Bearer ${kioskToken}` } : {},
+      signal: requestController.signal,
     });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.state ? `Станция занята: ${data.state}` : 'QR временно недоступен');
+    let data: Record<string, unknown> = {};
+    try {
+      data = await res.json() as Record<string, unknown>;
+    } catch {
+      if (res.ok) throw new PairingRequestError('Сервер вернул некорректный ответ.', 502);
     }
+    if (!res.ok) {
+      const state = typeof data.state === 'string' ? data.state : '';
+      const message = state ? `Станция занята: ${state}` : 'QR временно недоступен.';
+      throw new PairingRequestError(message, res.status);
+    }
+    if (typeof data.qrDataUrl !== 'string' || typeof data.mobileUrl !== 'string') {
+      throw new PairingRequestError('Сервер не вернул QR-код.', 502);
+    }
+    if (expectedLifecycle !== lifecycleVersion || gameSession.state !== 'pairing') return;
+
     qrCodeImg.src = data.qrDataUrl;
     controllerUrlCode.textContent = data.mobileUrl;
-    if (pairingRefreshTimer !== null) window.clearTimeout(pairingRefreshTimer);
-    const refreshDelay = Math.max(10_000, Math.min(60_000, Number(data.expiresAt) - Date.now() - 15_000));
-    pairingRefreshTimer = window.setTimeout(() => {
-      if (gameSession.state === 'pairing') void fetchServerInfo();
-    }, refreshDelay);
-  } catch (err) {
-    console.error('Error fetching server info:', err);
-    controllerUrlCode.textContent = 'Обновляем QR-код…';
-    if (gameSession.state === 'pairing') {
-      pairingRefreshTimer = window.setTimeout(() => void fetchServerInfo(), 3_000);
+    updateConnectionStatus('ОЖИДАНИЕ СМАРТФОНА', true);
+    preloadGameRuntimeAfterQrPaint(expectedLifecycle);
+    const expiresAt = Number(data.expiresAt);
+    const refreshDelay = Number.isFinite(expiresAt)
+      ? Math.max(10_000, Math.min(60_000, expiresAt - Date.now() - 15_000))
+      : 30_000;
+    schedulePairingRefresh(refreshDelay);
+  } catch (error) {
+    if (
+      expectedLifecycle !== lifecycleVersion ||
+      gameSession.state !== 'pairing' ||
+      (requestController.signal.aborted && !timedOut)
+    ) return;
+    if (timedOut) console.warn('Pairing QR request timed out; retrying.');
+    else console.error('Failed to load pairing QR:', error);
+    qrCodeImg.removeAttribute('src');
+    controllerUrlCode.textContent = pairingErrorMessage(error, timedOut);
+    updateConnectionStatus('QR-КОД НЕДОСТУПЕН', true);
+    schedulePairingRefresh();
+  } finally {
+    window.clearTimeout(timeout);
+    if (pairingRequestAbortController === requestController) {
+      pairingRequestAbortController = null;
     }
   }
 }
 
+function preloadGameRuntimeAfterQrPaint(expectedLifecycle: number) {
+  if (gameRuntimePreloadLifecycle === expectedLifecycle) return;
+  gameRuntimePreloadLifecycle = expectedLifecycle;
+  void (async () => {
+    try {
+      // The QR must become scannable before Rapier/WASM and ~9 MB of 3D assets
+      // start competing for the browser's connection pool and main thread.
+      await qrCodeImg.decode().catch(() => undefined);
+      await waitForNextPaint();
+      if (expectedLifecycle !== lifecycleVersion || experienceScreen !== 'labyrinth') return;
+      await ensureGameRuntime();
+    } catch (error) {
+      if (expectedLifecycle !== lifecycleVersion) return;
+      gameRuntimePreloadLifecycle = -1;
+      console.error('Game runtime preload failed:', error);
+      updateConnectionStatus('ОШИБКА ЗАГРУЗКИ ИГРЫ', true);
+    }
+  })();
+}
+
+async function runPairingSynchronization() {
+  const expectedLifecycle = lifecycleVersion;
+  if (gameSession.state !== 'pairing') return;
+
+  if (!socket.connected || !desktopSocketRegistered) {
+    qrCodeImg.removeAttribute('src');
+    if (desktopRegistrationFailure) {
+      controllerUrlCode.textContent = desktopRegistrationFailure;
+      updateConnectionStatus('ИГРОВОЙ ЭКРАН НЕ ЗАРЕГИСТРИРОВАН', true);
+      return;
+    }
+    controllerUrlCode.textContent = 'Подключаемся к серверу сеансов…';
+    updateConnectionStatus('ВОССТАНАВЛИВАЕМ СВЯЗЬ С СЕРВЕРОМ', true);
+    schedulePairingRefresh();
+    return;
+  }
+
+  if (pairingServerResetPending) {
+    try {
+      await sendSessionCommand(SESSION_COMMANDS.PAIR);
+      if (expectedLifecycle !== lifecycleVersion || gameSession.state !== 'pairing') return;
+      pairingServerResetPending = false;
+    } catch (error) {
+      if (expectedLifecycle !== lifecycleVersion || gameSession.state !== 'pairing') return;
+      console.error('Failed to reset pairing session:', error);
+      controllerUrlCode.textContent = socket.connected
+        ? 'Сервер ещё не готов к сопряжению. Повторяем…'
+        : 'Связь с сервером потеряна. Ждём переподключения…';
+      updateConnectionStatus('QR-КОД НЕДОСТУПЕН', true);
+      schedulePairingRefresh();
+      return;
+    }
+  }
+
+  await fetchServerInfo(expectedLifecycle);
+}
+
+function refreshPairingSession() {
+  clearPairingRefreshTimer();
+  if (pairingSyncPromise) {
+    pairingSyncQueued = true;
+    return pairingSyncPromise;
+  }
+
+  const syncPromise = runPairingSynchronization()
+    .catch((error) => {
+      console.error('Unexpected pairing synchronization error:', error);
+      if (gameSession.state === 'pairing') schedulePairingRefresh();
+    })
+    .finally(() => {
+      if (pairingSyncPromise !== syncPromise) return;
+      pairingSyncPromise = null;
+      const runAgain = pairingSyncQueued;
+      pairingSyncQueued = false;
+      if (runAgain && gameSession.state === 'pairing') void refreshPairingSession();
+    });
+  pairingSyncPromise = syncPromise;
+  return syncPromise;
+}
+
 // Set up websockets
 socket.on('connect', () => {
+  desktopSocketRegistered = false;
+  desktopRegistrationFailure = null;
   debugLog(`Connected to session server as station ${STATION_ID}.`);
   socket.emit(
     EVENTS.REGISTER_DESKTOP,
     { stationId: STATION_ID, kioskToken, instanceId: desktopInstanceId },
-    (response: { ok?: boolean; reason?: string }) => {
-      if (response?.ok !== false) return;
-      updateConnectionStatus('HOLOBOX НЕ АВТОРИЗОВАН', true);
-      controllerUrlCode.textContent = response.reason === 'kiosk-unauthorized'
+    (response?: { ok?: boolean; reason?: string }) => {
+      if (response?.ok === true) {
+        desktopSocketRegistered = true;
+        if (gameSession.state === 'pairing') void refreshPairingSession();
+        return;
+      }
+      desktopRegistrationFailure = response?.reason === 'kiosk-unauthorized'
         ? 'Откройте Render URL с фрагментом #kiosk=<KIOSK_TOKEN>.'
         : 'Не удалось зарегистрировать игровой экран.';
+      updateConnectionStatus('HOLOBOX НЕ АВТОРИЗОВАН', true);
+      controllerUrlCode.textContent = desktopRegistrationFailure;
     },
   );
 });
 
 socket.on('disconnect', () => {
+  desktopSocketRegistered = false;
+  desktopRegistrationFailure = null;
   isControllerConnected = false;
+  syncGeneratedImageButtonVisibility();
   phonePitch = 0;
   phoneRoll = 0;
   phoneYaw = 0;
   gameSession.pause(performance.now());
   isGameActive = false;
   updateConnectionStatus('ВОССТАНАВЛИВАЕМ СВЯЗЬ С СЕРВЕРОМ', true);
+  if (gameSession.state === 'pairing') {
+    clearPairingRefreshTimer();
+    abortPairingRequest();
+    qrCodeImg.removeAttribute('src');
+    controllerUrlCode.textContent = 'Связь с сервером потеряна. Ждём переподключения…';
+  }
+});
+
+socket.on('connect_error', () => {
+  if (gameSession.state !== 'pairing') return;
+  qrCodeImg.removeAttribute('src');
+  controllerUrlCode.textContent = `Сервер сеансов недоступен. ${localBackendHint()}`;
+  updateConnectionStatus('СЕРВЕР НЕДОСТУПЕН', true);
 });
 
 socket.on(EVENTS.CONTROLLER_STATUS, (status: {
@@ -449,22 +683,38 @@ socket.on(EVENTS.CONTROLLER_STATUS, (status: {
   state?: string;
 }) => {
   if (status.connected) {
+    const wasPairing = gameSession.state === 'pairing';
     isControllerConnected = true;
     currentControllerSessionId = status.sessionId || currentControllerSessionId;
+    syncGeneratedImageButtonVisibility();
     pairingOverlay.classList.add('hidden');
-    hudOverlay.classList.remove('hidden');
     updateConnectionStatus('СМАРТФОН АКТИВЕН');
     calibrate();
-    if (gameSession.state === 'paused') {
+    if (wasPairing) {
+      gameSession.controllerConnected();
+      showGameLoadingState();
+      void prepareControllerGame();
+    } else if (gameSession.state === 'paused') {
+      if (saveCelebrationActive || generatedImageViewerOpen) return;
+      if (pendingPostSaveAction !== null) {
+        continueAfterSaveCelebration();
+        return;
+      }
       gameSession.resume(performance.now());
       isGameActive = gameSession.isPlaying();
-    } else if (gameSession.state === 'pairing') {
-      gameSession.controllerConnected();
+      hudOverlay.classList.remove('hidden');
+    } else if (gameSession.state === 'calibrating') {
+      if (gameReadyForManualStart) showGameInstruction();
+      else {
+        showGameLoadingState();
+        void prepareControllerGame();
+      }
     }
     return;
   }
 
   isControllerConnected = false;
+  syncGeneratedImageButtonVisibility();
   phonePitch = 0;
   phoneRoll = 0;
   phoneYaw = 0;
@@ -493,7 +743,11 @@ socket.on(EVENTS.GYRO_UPDATE, (data: {
   if (data.alpha !== undefined) {
     phoneYaw = data.alpha * Math.PI / 180;
   }
-  if (gameSession.state === 'calibrating' && !sessionPreparationInFlight) {
+  if (
+    gameSession.state === 'calibrating'
+    && !sessionPreparationInFlight
+    && !gameReadyForManualStart
+  ) {
     void prepareControllerGame();
   }
 });
@@ -509,35 +763,132 @@ socket.on(EVENTS.SESSION_ENDED, (payload: { reason?: string }) => {
 });
 
 async function prepareControllerGame() {
-  if (sessionPreparationInFlight || gameSession.state !== 'calibrating') return;
+  if (
+    sessionPreparationInFlight
+    || gameReadyForManualStart
+    || gameSession.state !== 'calibrating'
+  ) return;
   sessionPreparationInFlight = true;
   const expectedLifecycle = lifecycleVersion;
   updateConnectionStatus('ГОТОВИМ ИГРУ…');
+  showGameLoadingState();
   try {
+    // Let the opaque loading state paint before synchronous FBX processing.
+    await waitForNextPaint();
     await prepareNewGame();
     if (
       expectedLifecycle !== lifecycleVersion ||
       !isControllerConnected ||
       gameSession.state !== 'calibrating'
     ) return;
-    gameSession.beginCountdown(performance.now());
-    updateConnectionStatus('СТАРТ ЧЕРЕЗ 3');
+    gameReadyForManualStart = true;
+    updateConnectionStatus('ИГРА ГОТОВА');
+    showGameInstruction();
   } catch (error) {
+    if (
+      expectedLifecycle !== lifecycleVersion
+      || !isControllerConnected
+      || gameSession.state !== 'calibrating'
+    ) return;
     console.error('Failed to prepare game session:', error);
+    isLevelLoading = false;
+    gameLoadingOverlay.classList.remove('hidden');
+    gameLoadingSpinner.classList.add('hidden');
+    gameLoadingError.classList.remove('hidden');
     controllerUrlCode.textContent = 'Ошибка загрузки игры. Нажмите «Начать заново».';
     updateConnectionStatus('ОШИБКА ПОДГОТОВКИ', true);
+    syncGeneratedImageButtonVisibility();
   } finally {
     sessionPreparationInFlight = false;
   }
 }
 
+function waitForNextPaint() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
+function showGameLoadingState() {
+  closeSettingsDrawer();
+  pairingOverlay.classList.add('hidden');
+  hudOverlay.classList.add('hidden');
+  gameInstructionOverlay.classList.add('hidden');
+  gameInstructionOverlay.setAttribute('aria-hidden', 'true');
+  gameLoadingSpinner.classList.remove('hidden');
+  gameLoadingError.classList.add('hidden');
+  gameLoadingOverlay.classList.remove('hidden');
+  settingsTrigger.classList.add('experience-hidden');
+  setShadowPresentationVisible(false);
+  syncGeneratedImageButtonVisibility();
+}
+
+function showGameInstruction() {
+  closeSettingsDrawer();
+  gameLoadingOverlay.classList.add('hidden');
+  hudOverlay.classList.add('hidden');
+  gameInstructionOverlay.classList.remove('hidden');
+  gameInstructionOverlay.setAttribute('aria-hidden', 'false');
+  settingsTrigger.classList.add('experience-hidden');
+  mazeContainer.visible = true;
+  setShadowPresentationVisible(true);
+  markShadowMapDirty();
+  renderSceneOnce();
+  startRenderLoop();
+  syncGeneratedImageButtonVisibility();
+}
+
+function startPreparedGame() {
+  if (
+    !gameReadyForManualStart
+    || !isControllerConnected
+    || gameSession.state !== 'calibrating'
+  ) return;
+
+  gameReadyForManualStart = false;
+  gameInstructionOverlay.classList.add('hidden');
+  gameInstructionOverlay.setAttribute('aria-hidden', 'true');
+  hudOverlay.classList.remove('hidden');
+  settingsTrigger.classList.remove('experience-hidden');
+  calibrate();
+  setShadowPresentationVisible(true);
+  if (gameSession.beginCountdown(performance.now())) {
+    setTextIfChanged(timerSpan, String(Math.ceil(COUNTDOWN_DURATION_MS / 1_000)));
+    updateConnectionStatus(`СТАРТ ЧЕРЕЗ ${Math.ceil(COUNTDOWN_DURATION_MS / 1_000)}`);
+    markShadowMapDirty();
+    startRenderLoop();
+    syncGeneratedImageButtonVisibility();
+  }
+}
+
+btnStartLabyrinth.addEventListener('click', startPreparedGame);
+btnRetryGameLoad.addEventListener('click', () => {
+  showGameLoadingState();
+  void prepareControllerGame();
+});
+btnResetAfterLoadError.addEventListener('click', () => void resetExperience(true));
+
 async function openPairing(resetServer: boolean) {
+  closeSettingsDrawer();
   lifecycleVersion += 1;
   if (resultResetTimer !== null) window.clearTimeout(resultResetTimer);
   resultResetTimer = null;
-  if (pairingRefreshTimer !== null) window.clearTimeout(pairingRefreshTimer);
-  pairingRefreshTimer = null;
+  if (saveCelebrationTimer !== null) window.clearTimeout(saveCelebrationTimer);
+  saveCelebrationTimer = null;
+  saveCelebrationActive = false;
+  pendingPostSaveAction = null;
+  renderer.domElement.classList.remove('game-paused-blurred');
+  saveProgressOverlay.classList.add('hidden');
+  saveProgressOverlay.setAttribute('aria-hidden', 'true');
+  generatedImageOverlay.classList.add('hidden');
+  generatedImageOverlay.setAttribute('aria-hidden', 'true');
+  generatedImageViewerOpen = false;
+  generatedImageViewerPausedGame = false;
+  clearPairingRefreshTimer();
+  abortPairingRequest();
+  pairingServerResetPending ||= resetServer;
   gameSession.enterPairing();
+  gameReadyForManualStart = false;
   isGameActive = false;
   isControllerConnected = false;
   currentControllerSessionId = null;
@@ -549,19 +900,24 @@ async function openPairing(resetServer: boolean) {
   if (physicsWorld) physicsWorld.gravity = { x: 0, y: -35, z: 0 };
   victoryOverlay.classList.add('hidden');
   hudOverlay.classList.add('hidden');
+  gameLoadingOverlay.classList.add('hidden');
+  gameInstructionOverlay.classList.add('hidden');
+  gameInstructionOverlay.setAttribute('aria-hidden', 'true');
+  saveProgressOverlay.classList.add('hidden');
+  settingsTrigger.classList.add('experience-hidden');
+  setShadowPresentationVisible(false);
   pairingOverlay.classList.remove('hidden');
-  updateConnectionStatus('ОЖИДАНИЕ СМАРТФОНА', true);
+  syncGeneratedImageButtonVisibility();
+  qrCodeImg.removeAttribute('src');
+  controllerUrlCode.textContent = desktopSocketRegistered
+    ? 'Создаём QR-код…'
+    : 'Подключаемся к серверу сеансов…';
+  updateConnectionStatus(
+    desktopSocketRegistered ? 'СОЗДАЁМ QR-КОД' : 'ВОССТАНАВЛИВАЕМ СВЯЗЬ С СЕРВЕРОМ',
+    true,
+  );
 
-  try {
-    if (resetServer) {
-      await sendSessionCommand(SESSION_COMMANDS.PAIR);
-    }
-    await fetchServerInfo();
-  } catch (error) {
-    console.error('Failed to open pairing:', error);
-    controllerUrlCode.textContent = 'Нет связи с сервером. Повторяем…';
-    pairingRefreshTimer = window.setTimeout(() => void openPairing(false), 3_000);
-  }
+  await refreshPairingSession();
 }
 
 function updateConnectionStatus(text: string, disconnected = false) {
@@ -573,6 +929,38 @@ function updateConnectionStatus(text: string, disconnected = false) {
 
 function setTextIfChanged(element: HTMLElement, text: string) {
   if (element.textContent !== text) element.textContent = text;
+}
+
+function closeSettingsDrawer() {
+  settingsPanel.classList.add('hidden');
+}
+
+function syncGeneratedImageButtonVisibility() {
+  const sessionCanShow = gameSession.state === 'calibrating'
+    || gameSession.state === 'countdown'
+    || gameSession.state === 'playing'
+    || gameSession.state === 'paused';
+  const shouldShow = Boolean(generatedTeamImageUrl)
+    && experienceScreen === 'labyrinth'
+    && isControllerConnected
+    && sessionCanShow
+    && gameLoadingOverlay.classList.contains('hidden')
+    && pairingOverlay.classList.contains('hidden')
+    && !saveCelebrationActive
+    && !generatedImageViewerOpen
+    && !isTransitioning
+    && !isLevelLoading;
+  btnViewGeneratedImage.classList.toggle('hidden', !shouldShow);
+}
+
+function syncSettingsTriggerVisibility() {
+  const shouldHide = !pairingOverlay.classList.contains('hidden')
+    || !gameLoadingOverlay.classList.contains('hidden')
+    || !gameInstructionOverlay.classList.contains('hidden')
+    || !saveProgressOverlay.classList.contains('hidden')
+    || generatedImageViewerOpen;
+  settingsTrigger.classList.toggle('experience-hidden', shouldHide);
+  if (shouldHide) closeSettingsDrawer();
 }
 
 function sendSessionCommand(action: string, result?: { isWin: boolean; savesCollected: number; elapsedMs: number }) {
@@ -672,8 +1060,18 @@ function cleanupCurrentLevel() {
 
 function endGame(isWin: boolean) {
   if (gameSession.state === 'result') return;
+  closeSettingsDrawer();
+  if (saveCelebrationTimer !== null) window.clearTimeout(saveCelebrationTimer);
+  saveCelebrationTimer = null;
+  saveCelebrationActive = false;
+  pendingPostSaveAction = null;
+  saveProgressOverlay.classList.add('hidden');
+  saveProgressOverlay.setAttribute('aria-hidden', 'true');
+  renderer.domElement.classList.remove('game-paused-blurred');
+  settingsTrigger.classList.remove('experience-hidden');
   const now = performance.now();
   gameSession.finish(now);
+  syncGeneratedImageButtonVisibility();
   const elapsedMs = Math.round(gameSession.elapsedMs(now));
   isGameActive = false;
   gameTimeLeft = Math.max(0, (GAME_DURATION_MS - elapsedMs) / 1000);
@@ -735,55 +1133,82 @@ async function prepareNewGame() {
 function updateSavesHUD() {
   const container = document.getElementById('saves-icons');
   if (!container) return;
-  
-  container.innerHTML = '';
-  for (let i = 0; i < totalSavesGoal; i++) {
+
+  container.replaceChildren();
+  for (let i = 0; i < savesCollected; i++) {
     const slot = document.createElement('div');
-    slot.className = `save-icon-slot ${i < savesCollected ? 'collected' : ''}`;
-    slot.innerHTML = `
-      <svg class="save-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-        <polyline points="17 21 17 13 7 13 7 21"></polyline>
-        <polyline points="7 3 7 8 15 8"></polyline>
-      </svg>
-    `;
-    container.appendChild(slot);
+    slot.className = 'save-icon-slot collected';
+    const icon = document.createElement('img');
+    icon.className = 'save-icon-svg';
+    icon.src = '/source/save.svg';
+    icon.alt = '';
+    slot.append(icon);
+    container.append(slot);
   }
 }
 
 function collectSave() {
   if (isTransitioning || !isGameActive || isSaveCollected || !saveMesh) return;
-  
+
   isSaveCollected = true;
   savesCollected++;
-  
-  sounds.playVictory();
-  
-  // Remove and release the per-session clone immediately.
-  disposeObject(saveMesh, true);
-  saveMesh = null;
-  saveEditorRoot?.removeFromParent();
-  saveEditorRoot = null;
-  
-  // Update graphic HUD
   updateSavesHUD();
-  
-  // Save collected -> transition to next level immediately!
-  completeLevel();
+  beginSaveCelebration();
 }
 
-function completeLevel() {
-  if (isTransitioning || !isGameActive) return;
-
-  // Check if we collected every configured save.
-  if (savesCollected >= totalSavesGoal) {
-    endGame(true); // Game Won!
-    return;
+function beginSaveCelebration() {
+  closeSettingsDrawer();
+  saveCelebrationActive = true;
+  gameSession.pause(performance.now());
+  isGameActive = false;
+  if (ballBody) {
+    ballBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    ballBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
-  
-  // Otherwise transition to next level!
-  const nextLevelIndex = (currentMazeIndex + 1) % LEVELS.length;
-  startTransitionToLevel(nextLevelIndex);
+
+  const remaining = Math.max(0, totalSavesGoal - savesCollected);
+  const collectedWord = savesCollected === 1 ? 'СЕЙВ' : 'СЕЙВА';
+  saveProgressMessage.textContent = remaining > 0
+    ? `ТЫ СОБРАЛ ${savesCollected} ${collectedWord}, ${remaining === 1 ? 'ОСТАЛСЯ' : 'ОСТАЛОСЬ'} ${remaining}`
+    : `ТЫ СОБРАЛ ${savesCollected} ${collectedWord}!`;
+  renderer.domElement.classList.add('game-paused-blurred');
+  saveProgressOverlay.classList.remove('hidden');
+  saveProgressOverlay.setAttribute('aria-hidden', 'false');
+  settingsTrigger.classList.add('experience-hidden');
+  syncGeneratedImageButtonVisibility();
+  renderSceneOnce();
+
+  if (saveCelebrationTimer !== null) window.clearTimeout(saveCelebrationTimer);
+  saveCelebrationTimer = window.setTimeout(finishSaveCelebration, 2_000);
+}
+
+function finishSaveCelebration() {
+  saveCelebrationTimer = null;
+  saveCelebrationActive = false;
+  saveProgressOverlay.classList.add('hidden');
+  saveProgressOverlay.setAttribute('aria-hidden', 'true');
+  renderer.domElement.classList.remove('game-paused-blurred');
+  settingsTrigger.classList.remove('experience-hidden');
+  pendingPostSaveAction = savesCollected >= totalSavesGoal
+    ? 'finish'
+    : (currentMazeIndex + 1) % LEVELS.length;
+  syncGeneratedImageButtonVisibility();
+  continueAfterSaveCelebration();
+}
+
+function continueAfterSaveCelebration() {
+  if (
+    pendingPostSaveAction === null
+    || !isControllerConnected
+    || gameSession.state !== 'paused'
+  ) return;
+
+  const action = pendingPostSaveAction;
+  pendingPostSaveAction = null;
+  gameSession.resume(performance.now());
+  isGameActive = gameSession.isPlaying();
+  if (action === 'finish') endGame(true);
+  else startTransitionToLevel(action);
 }
 
 function startTransitionToLevel(nextIndex: number) {
@@ -791,6 +1216,7 @@ function startTransitionToLevel(nextIndex: number) {
   transitionTime = 0.0;
   transitionDir = 1; // Fade out
   nextMazeIndexToLoad = nextIndex;
+  syncGeneratedImageButtonVisibility();
 }
 
 function resetGame() {
@@ -847,14 +1273,17 @@ function getGeometryBoundingBox(object: THREE.Object3D | null): THREE.Box3 {
 
 async function transitionToTeamSelection() {
   if (experienceScreen !== 'start' || !teamSelection) return;
+  closeSettingsDrawer();
   experienceScreen = 'transition';
   btnStartGame.disabled = true;
   sounds.init();
   const teamAssetsReady = teamSelection.preload();
+  startSaveDecorations?.beginExit(760);
   startOverlay.classList.add('is-leaving');
 
   await delay(1_080);
   if (experienceScreen !== 'transition') return;
+  startSaveDecorations?.hide();
   startOverlay.classList.add('hidden');
   startOverlay.setAttribute('aria-hidden', 'true');
   teamSelectionOverlay.classList.remove('hidden', 'is-team-selected', 'is-selection-ready');
@@ -886,6 +1315,7 @@ function handleTeamSelectionReady(team: TeamDefinition) {
 
 async function openPhotoScreen() {
   if (experienceScreen !== 'team' || !selectedTeam) return;
+  closeSettingsDrawer();
   experienceScreen = 'photo';
   btnOpenCamera.disabled = true;
   teamSelectionOverlay.classList.add('hidden');
@@ -893,6 +1323,8 @@ async function openPhotoScreen() {
   teamSelectionOverlay.setAttribute('aria-hidden', 'true');
   teamSelection?.hide();
   renderer.domElement.classList.remove('team-ball-blurred');
+  markShadowMapDirty();
+  renderSceneOnce();
   updateRendererQuality();
   resetCameraPreview();
   photoOverlay.classList.remove('hidden');
@@ -914,8 +1346,7 @@ async function startCamera() {
     await cameraVideo.play();
     await waitForVideoFrame(cameraVideo, 5_000);
     btnCapturePhoto.disabled = false;
-    setCameraStatus('Покажи 👍 или нажми кнопку', 'hint', 2_600);
-    thumbUpCapture.start(cameraVideo, capturePhoto, handleThumbCaptureState);
+    setCameraStatus('Нажми «Сделать фото»', 'hint', 2_600);
   } catch (error) {
     stopCamera();
     const message = error instanceof DOMException && error.name === 'NotAllowedError'
@@ -944,21 +1375,62 @@ function capturePhoto() {
     || cameraVideo.videoWidth <= 0
     || cameraVideo.videoHeight <= 0
   ) return;
+  const countdownVersion = ++photoCountdownVersion;
   photoCaptureInFlight = true;
-  void capturePhotoAsync()
+  btnCapturePhoto.disabled = true;
+  setCameraStatus('', 'hidden');
+  void runPhotoCountdown(countdownVersion)
+    .then((completed) => {
+      if (!completed) return;
+      return capturePhotoAsync();
+    })
     .catch((error) => {
       console.error('Photo capture failed:', error);
       setCameraStatus('Не удалось обработать фото. Попробуйте ещё раз.', 'error');
-      btnCapturePhoto.disabled = false;
-      thumbUpCapture.start(cameraVideo, capturePhoto, handleThumbCaptureState);
     })
     .finally(() => {
+      if (countdownVersion === photoCountdownVersion) hidePhotoCountdown();
       photoCaptureInFlight = false;
+      if (!capturedPhotoDataUrl && cameraStream) btnCapturePhoto.disabled = false;
     });
 }
 
+async function runPhotoCountdown(version: number) {
+  for (let value = 3; value >= 1; value -= 1) {
+    if (
+      version !== photoCountdownVersion
+      || experienceScreen !== 'photo'
+      || !cameraStream
+      || capturedPhotoDataUrl
+    ) return false;
+
+    cameraCountdown.textContent = String(value);
+    cameraCountdown.setAttribute('aria-hidden', 'false');
+    cameraCountdown.classList.remove('is-ticking');
+    void cameraCountdown.offsetWidth;
+    cameraCountdown.classList.add('is-visible', 'is-ticking');
+    await delay(1_000);
+  }
+
+  hidePhotoCountdown();
+  return version === photoCountdownVersion
+    && experienceScreen === 'photo'
+    && Boolean(cameraStream)
+    && !capturedPhotoDataUrl;
+}
+
+function hidePhotoCountdown() {
+  cameraCountdown.classList.remove('is-visible', 'is-ticking');
+  cameraCountdown.setAttribute('aria-hidden', 'true');
+  cameraCountdown.textContent = '';
+}
+
+function cancelPhotoCountdown() {
+  photoCountdownVersion += 1;
+  hidePhotoCountdown();
+}
+
 async function capturePhotoAsync() {
-  thumbUpCapture.pause();
   btnCapturePhoto.disabled = true;
   const sourceWidth = cameraVideo.videoWidth;
   const sourceHeight = cameraVideo.videoHeight;
@@ -1030,6 +1502,7 @@ function encodeCanvasAsDataUrl(canvas: HTMLCanvasElement, quality: number) {
 }
 
 function resetCameraPreview() {
+  cancelPhotoCountdown();
   capturedPhotoDataUrl = '';
   cameraPreview.removeAttribute('src');
   cameraPreview.classList.add('hidden');
@@ -1047,8 +1520,7 @@ function retakePhoto() {
   resetCameraPreview();
   btnCapturePhoto.disabled = !cameraStream;
   if (cameraStream) {
-    setCameraStatus('Покажи 👍 или нажми кнопку', 'hint', 2_600);
-    thumbUpCapture.start(cameraVideo, capturePhoto, handleThumbCaptureState);
+    setCameraStatus('Нажми «Сделать фото»', 'hint', 2_600);
   }
 }
 
@@ -1061,9 +1533,17 @@ function confirmPhoto() {
   const photo = capturedPhotoDataUrl;
   const team = selectedTeam;
   const abortController = new AbortController();
+  const requestVersion = ++generatedImageRequestVersion;
   generationAbortController = abortController;
   void submitTeamGeneration(photo, team, kioskToken, abortController.signal)
     .then((result) => {
+      if (requestVersion !== generatedImageRequestVersion) return;
+      const imageSource = result.imageDataUrl || result.imageUrl || '';
+      if (imageSource) {
+        generatedTeamImageUrl = imageSource;
+        generatedTeamImage.src = imageSource;
+        syncGeneratedImageButtonVisibility();
+      }
       window.dispatchEvent(new CustomEvent('team-image-ready', { detail: { ...result, team } }));
     })
     .catch((error) => {
@@ -1078,33 +1558,96 @@ function confirmPhoto() {
   void enterLabyrinthFlow();
 }
 
+function openGeneratedImage() {
+  if (
+    !generatedTeamImageUrl
+    || !isControllerConnected
+    || saveCelebrationActive
+    || isTransitioning
+    || isLevelLoading
+  ) return;
+  closeSettingsDrawer();
+  generatedTeamImage.src = generatedTeamImageUrl;
+  generatedImageViewerOpen = true;
+  generatedImageViewerPausedGame = gameSession.state === 'playing' || gameSession.state === 'countdown';
+  if (generatedImageViewerPausedGame) {
+    gameSession.pause(performance.now());
+    isGameActive = false;
+  }
+  generatedImageOverlay.classList.remove('hidden');
+  generatedImageOverlay.setAttribute('aria-hidden', 'false');
+  settingsTrigger.classList.add('experience-hidden');
+  syncGeneratedImageButtonVisibility();
+}
+
+function closeGeneratedImage() {
+  generatedImageOverlay.classList.add('hidden');
+  generatedImageOverlay.setAttribute('aria-hidden', 'true');
+  generatedImageViewerOpen = false;
+  syncSettingsTriggerVisibility();
+  if (
+    generatedImageViewerPausedGame
+    && isControllerConnected
+    && gameSession.state === 'paused'
+    && pendingPostSaveAction === null
+  ) {
+    gameSession.resume(performance.now());
+    isGameActive = gameSession.isPlaying();
+    startRenderLoop();
+  }
+  generatedImageViewerPausedGame = false;
+  syncGeneratedImageButtonVisibility();
+}
+
+function resetGeneratedImageState() {
+  generatedImageRequestVersion += 1;
+  generatedTeamImageUrl = '';
+  generatedTeamImage.removeAttribute('src');
+  btnViewGeneratedImage.classList.add('hidden');
+  generatedImageOverlay.classList.add('hidden');
+  generatedImageOverlay.setAttribute('aria-hidden', 'true');
+  generatedImageViewerOpen = false;
+  generatedImageViewerPausedGame = false;
+}
+
+btnViewGeneratedImage.addEventListener('click', openGeneratedImage);
+btnCloseGeneratedImage.addEventListener('click', closeGeneratedImage);
+
 async function enterLabyrinthFlow() {
+  closeSettingsDrawer();
   experienceScreen = 'labyrinth';
   photoOverlay.classList.add('hidden');
   photoOverlay.setAttribute('aria-hidden', 'true');
   settingsTrigger.classList.remove('experience-hidden');
   hideStartScreen();
-  // Clear the last team-ball frame once; the continuous loop resumes only
-  // after the first maze has actually been prepared.
-  renderSceneOnce(false);
-  // Physics and maze assets load while the guest scans the QR code. They are
-  // intentionally absent from the critical start/team/photo path.
-  void ensureGameRuntime().catch((error) => {
-    console.error('Game runtime preload failed:', error);
-    updateConnectionStatus('ОШИБКА ЗАГРУЗКИ ИГРЫ', true);
-  });
+  // The cached shadow map may still contain the selected team ball. Hide the
+  // receiver throughout pairing and rebuild it only after the maze is ready.
+  setShadowPresentationVisible(false);
+  markShadowMapDirty();
+  renderSceneOnce();
+  // Pairing deliberately starts before Rapier/WASM and FBX preloading. The
+  // runtime preload is scheduled only after the QR image has painted.
   await openPairing(true);
 }
 
 async function resetExperience(resetServer: boolean) {
+  closeSettingsDrawer();
   lifecycleVersion += 1;
   generationAbortController?.abort();
   generationAbortController = null;
+  resetGeneratedImageState();
   stopCamera();
   if (resultResetTimer !== null) window.clearTimeout(resultResetTimer);
   resultResetTimer = null;
-  if (pairingRefreshTimer !== null) window.clearTimeout(pairingRefreshTimer);
-  pairingRefreshTimer = null;
+  clearPairingRefreshTimer();
+  abortPairingRequest();
+  if (saveCelebrationTimer !== null) window.clearTimeout(saveCelebrationTimer);
+  saveCelebrationTimer = null;
+  saveCelebrationActive = false;
+  pendingPostSaveAction = null;
+  gameReadyForManualStart = false;
+  pairingSyncQueued = false;
+  pairingServerResetPending = false;
   experienceScreen = 'start';
   selectedTeam = null;
   capturedPhotoDataUrl = '';
@@ -1113,7 +1656,7 @@ async function resetExperience(resetServer: boolean) {
   currentControllerSessionId = null;
   gameSession.enterAttract();
   teamSelection?.reset();
-  renderer.domElement.classList.remove('team-ball-blurred');
+  renderer.domElement.classList.remove('team-ball-blurred', 'game-paused-blurred');
   teamSelectionOverlay.classList.add('hidden');
   teamSelectionOverlay.classList.remove('is-visible', 'is-team-selected', 'is-selection-ready');
   teamSelectionOverlay.setAttribute('aria-hidden', 'true');
@@ -1127,11 +1670,17 @@ async function resetExperience(resetServer: boolean) {
   btnOpenCamera.disabled = true;
   settingsTrigger.classList.remove('experience-hidden');
   pairingOverlay.classList.add('hidden');
+  gameLoadingOverlay.classList.add('hidden');
+  gameInstructionOverlay.classList.add('hidden');
+  gameInstructionOverlay.setAttribute('aria-hidden', 'true');
+  saveProgressOverlay.classList.add('hidden');
+  saveProgressOverlay.setAttribute('aria-hidden', 'true');
   hudOverlay.classList.add('hidden');
   victoryOverlay.classList.add('hidden');
   startOverlay.classList.remove('hidden', 'is-leaving');
   startOverlay.setAttribute('aria-hidden', 'false');
   btnStartGame.disabled = false;
+  setShadowPresentationVisible(true);
   showStartScreen();
   if (resetServer && socket.connected) {
     await sendSessionCommand(SESSION_COMMANDS.PAIR).catch((error) => {
@@ -1141,7 +1690,7 @@ async function resetExperience(resetServer: boolean) {
 }
 
 function stopCamera() {
-  thumbUpCapture.stop();
+  cancelPhotoCountdown();
   cameraStream?.getTracks().forEach((track) => track.stop());
   cameraStream = null;
   cameraVideo.srcObject = null;
@@ -1227,15 +1776,6 @@ function waitForVideoFrame(video: HTMLVideoElement, timeoutMs: number) {
   });
 }
 
-function handleThumbCaptureState(state: ThumbCaptureState) {
-  if (experienceScreen !== 'photo' || capturedPhotoDataUrl) return;
-  if (state === 'ready') {
-    setCameraStatus('Покажи 👍 или нажми кнопку', 'hint', 2_600);
-  } else if (state === 'unavailable') {
-    setCameraStatus('Жест недоступен — используй кнопку', 'hint', 3_400);
-  }
-}
-
 function setCameraStatus(
   message: string,
   mode: 'loading' | 'hint' | 'error' | 'hidden',
@@ -1284,7 +1824,9 @@ function updateShadowSystem(now: number, forceShadowMap = false) {
   const contentRadius = experienceScreen === 'labyrinth'
     ? Math.max(0, Math.max(mazeSize.x, mazeSize.z) * 0.55)
     : 1.8;
-  const receiverDistance = shadowSettings.distanceBehindFocus + contentRadius;
+  const receiverDistance = experienceScreen === 'labyrinth'
+    ? shadowSettings.distanceBehindFocus + contentRadius
+    : shadowSettings.screenDistanceBehindFocus;
   shadowReceiver.position.copy(shadowFocus).addScaledVector(shadowViewDirection, receiverDistance);
   shadowReceiver.quaternion.copy(camera.quaternion);
   shadowReceiver.scale.setScalar(shadowSettings.size);
@@ -1328,6 +1870,12 @@ function markShadowMapDirty() {
   nextShadowMapUpdateAt = 0;
 }
 
+function setShadowPresentationVisible(visible: boolean) {
+  if (shadowReceiver) shadowReceiver.visible = visible;
+  if (shadowKeyLight) shadowKeyLight.visible = visible;
+  if (visible) markShadowMapDirty();
+}
+
 function enableAutomaticMeshShadows() {
   scene.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return;
@@ -1361,10 +1909,17 @@ function showStartScreen() {
   applyCameraView(startCameraView);
   updateRendererQuality();
   renderSceneOnce(false);
+  void startSaveDecorations?.show()
+    .then(() => {
+      markShadowMapDirty();
+      startRenderLoop();
+    })
+    .catch((error) => console.error('Start save decorations failed to load:', error));
 }
 
 function hideStartScreen() {
   isStartScreenActive = false;
+  startSaveDecorations?.hide();
   mazeContainer.visible = true;
   
   if (scene) {
@@ -1378,7 +1933,7 @@ function hideStartScreen() {
 
 async function ensureGameRuntime() {
   if (gameRuntimePromise) return gameRuntimePromise;
-  gameRuntimePromise = (async () => {
+  const runtimeLoad = (async () => {
     const rapierReady = import('@dimforge/rapier3d-compat').then(async (module) => {
       RAPIER = module.default;
       await RAPIER.init();
@@ -1387,6 +1942,12 @@ async function ensureGameRuntime() {
     physicsWorld = new RAPIER.World({ x: 0, y: -35, z: 0 });
     debugLog(`Game runtime ready: ${LEVELS.length} mazes, props and Rapier.`);
   })();
+  gameRuntimePromise = runtimeLoad.catch((error) => {
+    // A rejected cached promise would make the visible Retry button fail
+    // forever. Clear it so a transient asset/network error can recover.
+    gameRuntimePromise = null;
+    throw error;
+  });
   return gameRuntimePromise;
 }
 
@@ -1515,6 +2076,14 @@ async function init() {
   frontLight.position.set(0, 30, 40);
   frontLight.name = 'front-light';
   scene.add(frontLight);
+
+  startSaveDecorations = new StartSaveDecorations({
+    scene,
+    onReady: () => {
+      sceneEditorPanel?.applyStoredValues();
+      markShadowMapDirty();
+    },
+  });
 
   teamSelection = new TeamSelection3D({
     scene,
@@ -2013,6 +2582,7 @@ function spawnGameElements() {
   debugLog(`Finish spawned at: x=${finishPos.x.toFixed(2)}, y=${finishPos.y.toFixed(2)}, z=${finishPos.z.toFixed(2)}`);
 
   isLevelLoading = false;
+  syncGeneratedImageButtonVisibility();
 
 
 
@@ -2034,7 +2604,8 @@ function onWindowResize() {
     startRenderLoop();
   } else if (isStartScreenActive) {
     applyCameraView(startCameraView);
-    renderSceneOnce(false);
+    renderSceneOnce();
+    startRenderLoop();
   } else {
     positionCamera();
     markShadowMapDirty();
@@ -2043,7 +2614,9 @@ function onWindowResize() {
 }
 
 function shouldRenderWebGl() {
-  return experienceScreen === 'team' || experienceScreen === 'labyrinth';
+  return experienceScreen === 'team'
+    || experienceScreen === 'labyrinth'
+    || Boolean(startSaveDecorations?.needsContinuousRender());
 }
 
 function startRenderLoop() {
@@ -2067,15 +2640,31 @@ function animate(now: number) {
     return;
   }
 
-  // Pairing, countdown, pause and result screens keep a high-quality 3D
-  // background at 30 FPS; active play and floating team balls remain 60 FPS.
-  if (experienceScreen === 'labyrinth' && !isGameActive && now - lastFrameAt < 33) {
+  // The attract screen and inactive labyrinth keep high-quality 3D at 30 FPS;
+  // active play and interactive team balls remain at 60 FPS.
+  const useThirtyFps = experienceScreen === 'start'
+    || experienceScreen === 'transition'
+    || (experienceScreen === 'labyrinth' && !isGameActive);
+  if (useThirtyFps && now - lastFrameAt < 33) {
     requestAnimationFrame(animate);
     return;
   }
 
   const dt = Math.min(0.05, Math.max(0, (now - lastFrameAt) / 1_000));
   lastFrameAt = now;
+  startSaveDecorations?.update(now);
+
+  if (experienceScreen === 'start' || experienceScreen === 'transition') {
+    updateShadowSystem(now);
+    renderer.render(scene, camera);
+    if (shouldRenderWebGl()) {
+      requestAnimationFrame(animate);
+    } else {
+      isAnimating = false;
+    }
+    return;
+  }
+
   teamSelection?.update(now);
   const sessionTick = gameSession.tick(now);
   if (gameSession.state === 'countdown') {
@@ -2100,7 +2689,7 @@ function animate(now: number) {
     setTextIfChanged(timerSpan, String(Math.ceil(sessionTick.remainingMs / 1000)));
   }
   // 3. Normal active Save Mesh Hover rotation in the level
-  if (saveMesh && saveMesh.parent === mazeContainer) {
+  if (saveMesh && !saveCelebrationActive) {
     saveMesh.rotation.y += 2.99 * dt;
     const bobOffset = Math.sin(Date.now() * 0.003) * 0.04;
     saveMesh.position.y = (floorTopY + 0.03 + (ballRadius * 1.6) * 0.6) + bobOffset;
@@ -2248,6 +2837,7 @@ function animate(now: number) {
       
       if (transitionTime <= 0.0) {
         isTransitioning = false;
+        syncGeneratedImageButtonVisibility();
       }
     }
   }
@@ -2255,14 +2845,18 @@ function animate(now: number) {
   if (physicsWorld && ballBody && ballMesh) {
     const simulationActive = isGameActive && gameSession.state === 'playing' && !isLevelLoading && !isStartScreenActive;
     if (!simulationActive) {
-      // Keep everything flat and unrotated during level build
-      currentPitch = 0;
-      currentRoll = 0;
-      currentYaw = 0;
-      if (mazeContainer) {
-        mazeContainer.quaternion.set(0, 0, 0, 1);
+      if (!saveCelebrationActive && !generatedImageViewerOpen) {
+        // Keep everything flat and unrotated during level build. During the
+        // two-second save pause and fullscreen image view the current tilt is
+        // deliberately preserved.
+        currentPitch = 0;
+        currentRoll = 0;
+        currentYaw = 0;
+        if (mazeContainer) {
+          mazeContainer.quaternion.set(0, 0, 0, 1);
+        }
+        physicsWorld.gravity = { x: 0, y: -35.0, z: 0 };
       }
-      physicsWorld.gravity = { x: 0, y: -35.0, z: 0 };
     } else {
       // Update manual offsets from keyboard visual button presses (WASD keys)
       const tiltRate = 2.2 * dt; 
@@ -2391,8 +2985,8 @@ function animate(now: number) {
   // Render Scene
   renderer.render(scene, camera);
 
-  const keepRendering = experienceScreen === 'labyrinth'
-    || (experienceScreen === 'team' && Boolean(teamSelection?.needsContinuousRender()));
+  const keepRendering = shouldRenderWebGl()
+    && (experienceScreen !== 'team' || Boolean(teamSelection?.needsContinuousRender()));
   if (keepRendering) {
     requestAnimationFrame(animate);
   } else {
@@ -2457,14 +3051,14 @@ window.addEventListener('keyup', (e) => {
 });
 
 // Extensible operator layout/scene editor.
-const settingsTrigger = document.getElementById('settings-trigger') as HTMLButtonElement;
-const settingsPanel = document.getElementById('settings-panel') as HTMLElement;
-const settingsClose = document.getElementById('settings-close') as HTMLButtonElement;
 const settingsGroupSelect = document.getElementById('settings-group-select') as HTMLSelectElement;
 const settingsTargetSelect = document.getElementById('settings-target-select') as HTMLSelectElement;
 const settingsDynamicControls = document.getElementById('settings-dynamic-controls') as HTMLElement;
 const settingsResetTarget = document.getElementById('settings-reset-target') as HTMLButtonElement;
 const settingsResetAll = document.getElementById('settings-reset-all') as HTMLButtonElement;
+
+restoreStartAndTeamCameraDefaultsOnce();
+restoreTeamBallGroupRotationOnce();
 
 sceneEditorPanel = new SceneEditorPanel({
   trigger: settingsTrigger,
@@ -2477,6 +3071,47 @@ sceneEditorPanel = new SceneEditorPanel({
   resetAll: settingsResetAll,
   targetProvider: buildEditorTargets,
 });
+
+function restoreStartAndTeamCameraDefaultsOnce() {
+  migrateSceneEditorStateOnce('holobox-camera-defaults-restored-v1', (values) => {
+    delete values['camera:start'];
+    delete values['camera:team'];
+  });
+}
+
+function restoreTeamBallGroupRotationOnce() {
+  migrateSceneEditorStateOnce('holobox-team-ball-group-rotation-restored-v1', (values) => {
+    const teamBallGroup = values['three:team-scene-v2'];
+    if (!teamBallGroup) return;
+    teamBallGroup.rotationX = 0;
+    teamBallGroup.rotationY = 0;
+    teamBallGroup.rotationZ = 0;
+  });
+}
+
+function migrateSceneEditorStateOnce(
+  migrationKey: string,
+  update: (values: Record<string, Record<string, number>>) => void,
+) {
+  try {
+    if (localStorage.getItem(migrationKey) === '1') return;
+    const rawState = localStorage.getItem(SCENE_EDITOR_STORAGE_KEY);
+    if (rawState) {
+      const state = JSON.parse(rawState) as {
+        version?: unknown;
+        values?: Record<string, Record<string, number>>;
+      };
+      if (state.version === 1 && state.values && typeof state.values === 'object') {
+        update(state.values);
+        localStorage.setItem(SCENE_EDITOR_STORAGE_KEY, JSON.stringify(state));
+      }
+    }
+    localStorage.setItem(migrationKey, '1');
+  } catch {
+    // Storage may be unavailable in private mode; in that case camera values
+    // already fall back to the defaults declared below.
+  }
+}
 
 function buildEditorTargets(): EditorTarget[] {
   return [
@@ -2706,6 +3341,9 @@ function buildThreeEditorTargets(): EditorTarget[] {
   add('game-maze', 'Лабиринт', '3D — лабиринт', mazeEditorRoot);
   add('game-ball', 'Игровой мяч', '3D — лабиринт', ballEditorRoot);
   add('game-save', 'Сейв', '3D — лабиринт', saveEditorRoot);
+  for (const target of startSaveDecorations?.getEditorObjects() || []) {
+    add(target.id, target.label, '3D — стартовый экран', target.object);
+  }
   for (const target of teamSelection?.getEditorObjects() || []) {
     add(target.id, target.label, '3D — выбор команды', target.object);
   }
@@ -2774,7 +3412,8 @@ function buildShadowEditorTarget(): EditorTarget {
     group: 'Свет и тени',
     fields: [
       createField('opacity', 'Плотность тени', 0, 0.8, 0.01, 0.22, () => shadowSettings.opacity, (value) => { shadowSettings.opacity = value; }),
-      createField('distance', 'Отступ плоскости', 0.5, 30, 0.1, 3.5, () => shadowSettings.distanceBehindFocus, (value) => { shadowSettings.distanceBehindFocus = value; }, ' м'),
+      createField('distance', 'Отступ плоскости — лабиринт', 0.5, 30, 0.1, 3.5, () => shadowSettings.distanceBehindFocus, (value) => { shadowSettings.distanceBehindFocus = value; }, ' м'),
+      createField('screenDistance', 'Отступ плоскости — экраны', 0.3, 10, 0.1, 1.2, () => shadowSettings.screenDistanceBehindFocus, (value) => { shadowSettings.screenDistanceBehindFocus = value; }, ' м'),
       createField('size', 'Размер плоскости', 10, 160, 1, 60, () => shadowSettings.size, (value) => { shadowSettings.size = value; }, ' м'),
       createField('lightX', 'Свет: смещение X', -30, 30, 0.1, -5, () => shadowSettings.lightOffsetX, (value) => { shadowSettings.lightOffsetX = value; }, ' м'),
       createField('lightY', 'Свет: высота', -10, 40, 0.1, 7, () => shadowSettings.lightOffsetY, (value) => { shadowSettings.lightOffsetY = value; }, ' м'),

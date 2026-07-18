@@ -1,13 +1,23 @@
 {
   "name": "phone-gyro-control",
   "version": "1.0.0",
-  "description": "",
+  "description": "Holobox maze controlled from a paired smartphone gyroscope",
   "main": "server.js",
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "node server.js",
+    "check": "tsc --noEmit",
+    "lint": "node --check server.js && node --check run.js && node --check shared/protocol.js && node --check server/eventStore.js && node --check server/networkAddress.js && node --check server/sessionCoordinator.js",
+    "test": "node --test tests/*.test.js",
     "build": "vite build",
-    "start": "node server.js"
+    "start": "node server.js --prod",
+    "start:prod": "node server.js --prod",
+    "preview:prod": "npm run build && node run.js",
+    "event": "npm run preview:prod",
+    "verify": "npm run lint && npm run check && npm test && npm run build"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.19.3",

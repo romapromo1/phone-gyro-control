@@ -10,11 +10,11 @@
 <body>
   <div id="controller-app">
     <!-- Initial Permission Screen -->
-    <div id="permission-screen" class="screen">
+    <div id="permission-screen" class="screen" aria-busy="false">
       <div class="glass-panel text-center animate-fade-in">
         <h1 class="glow-text-mobile">Gyro Control</h1>
-        <p class="desc">Положите смартфон горизонтально на ладонь экраном вверх и нажмите кнопку калибровки, чтобы установить начальный наклон в ноль.</p>
-        <button id="btn-request-permission" class="glow-btn">Калибровка</button>
+        <p id="permission-description" class="desc" aria-live="polite">Положите смартфон горизонтально на ладонь экраном вверх и подключите управление.</p>
+        <button id="btn-request-permission" class="glow-btn" type="button">Подключить управление</button>
       </div>
     </div>
 
@@ -22,7 +22,7 @@
     <div id="dashboard-screen" class="screen hidden">
       <div class="header">
         <div class="status-badge">
-          <span class="status-indicator-dot"></span> СВЯЗЬ АКТИВНА
+          <span class="status-indicator-dot"></span> <span id="controller-status-text">СВЯЗЬ АКТИВНА</span>
         </div>
       </div>
 
@@ -61,7 +61,15 @@
 
       <div class="controls-area">
         <p class="instruction">Держите телефон плоско. Если лабиринт накренился, нажмите кнопку калибровки:</p>
-        <button id="btn-calibrate-mobile" class="glow-btn btn-full">Калибровка</button>
+        <button id="btn-calibrate-mobile" class="glow-btn btn-full" type="button">Калибровка</button>
+      </div>
+    </div>
+
+    <!-- The consumed QR cannot be reused after a guest finishes. -->
+    <div id="session-ended-screen" class="screen hidden">
+      <div class="glass-panel text-center animate-fade-in">
+        <h1 class="glow-text-mobile">Спасибо за игру!</h1>
+        <p id="session-ended-message" class="desc">Сессия завершена. Передайте очередь следующему гостю — ему понадобится новый QR-код на экране.</p>
       </div>
     </div>
   </div>

@@ -1,0 +1,63 @@
+.operator-shell {
+  width: min(1100px, 94vw);
+  margin: 0 auto;
+  padding: 32px 0;
+}
+
+.operator-auth {
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.operator-token-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+#operator-token {
+  flex: 1;
+  min-width: 220px;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  color: white;
+}
+
+.stations-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.station-card {
+  padding: 20px;
+}
+
+.station-card dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.station-card dd {
+  text-align: right;
+}
+
+.operator-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.operator-actions button {
+  flex: 1;
+}
+
+@media (max-width: 600px) {
+  .operator-token-row,
+  .operator-actions {
+    flex-direction: column;
+  }
+}
